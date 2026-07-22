@@ -1,0 +1,162 @@
+<!doctype html>
+<!--
+  Includes fflate 0.8.2 (https://github.com/101arrowz/fflate), MIT License.
+  Copyright (c) 2026 Arjun Barrett.
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to inclusion of this notice.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Privately import a Trakt export into Nuvio Sync. Your ZIP is processed entirely in your browser.">
+  <meta http-equiv="Content-Security-Policy" content="/* APP_CSP */">
+  <title>Trakt to Nuvio Sync Importer</title>
+  <style>/* APP_CSS */</style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div class="eyebrow">LOCAL MIGRATION UTILITY</div>
+      <h1>Trakt <span>→</span> Nuvio Sync</h1>
+      <p>Move your watchlist, watched movie and episode states, and Continue Watching positions into Nuvio without connecting your Trakt account.</p>
+      <div class="hero-pills">
+        <div class="privacy-pill">Your ZIP stays in this browser. It is never uploaded.</div>
+        <div class="version-pill">Importer <strong id="importer-version"></strong></div>
+      </div>
+    </header>
+
+    <div id="status" class="status" hidden aria-live="polite"></div>
+
+    <section>
+      <div class="step-number">1</div>
+      <div class="step-content">
+        <h2>Choose your Trakt export</h2>
+        <p>Select the original ZIP from Trakt. The importer reads it locally and deduplicates repeated plays into Nuvio’s watched-state model.</p>
+        <label class="file-picker">
+          <input id="zip-input" type="file" accept=".zip,application/zip">
+          <span>Choose Trakt ZIP</span>
+        </label>
+
+        <div id="summary" hidden>
+          <div class="stat-grid">
+            <div><strong id="count-library">0</strong><span>Watchlist</span></div>
+            <div><strong id="count-watched">0</strong><span>Watched states</span></div>
+            <div><strong id="count-progress">0</strong><span>Resume positions</span></div>
+            <div><strong id="count-history">0</strong><span>History plays read</span></div>
+          </div>
+          <p id="plan-warnings" class="inline-warning" hidden></p>
+          <details>
+            <summary>Other records retained in the original ZIP</summary>
+            <p><span id="count-ratings">0</span> personal ratings and <span id="count-lists">0</span> personal/managed lists cannot be represented by Nuvio Sync’s current local schema. They are not discarded or flattened into the wrong category; they remain in your source ZIP and are documented in the audit.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="step-number">2</div>
+      <div class="step-content">
+        <h2>Resolve artwork and exact resume times</h2>
+        <p>Trakt exports playback as a percentage, while Nuvio Sync stores milliseconds. This lookup converts each percentage using the title’s runtime and fills your watchlist artwork.</p>
+        <label id="metadata-consent-row" class="consent" hidden>
+          <input id="metadata-consent" type="checkbox">
+          <span>Allow public IMDb IDs only to be sent to Cinemeta for artwork and runtime. The ZIP, account, watch timestamps, ratings, and playback percentages are never sent.</span>
+        </label>
+        <button id="metadata-button" type="button" disabled>Resolve metadata</button>
+        <p id="metadata-state" class="substatus"></p>
+
+        <div id="unresolved-section" hidden>
+          <h3>Runtime needed</h3>
+          <p>Cinemeta could not resolve these titles. Enter the runtime in minutes, or use a clearly marked estimate.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Title</th><th>Item</th><th>Minutes</th></tr></thead>
+              <tbody id="unresolved-body"></tbody>
+            </table>
+          </div>
+          <div class="button-row">
+            <button id="manual-runtime-button" type="button">Apply entered runtimes</button>
+            <button id="estimate-runtime-button" type="button" class="secondary">Use 100/45-minute estimates</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="step-number">3</div>
+      <div class="step-content">
+        <h2>Sign in to Nuvio Sync</h2>
+        <p>This uses Nuvio’s own TV sign-in flow. Your access token stays in this tab and is cleared when you close it.</p>
+        <button id="login-button" type="button" disabled>Start Nuvio sign-in</button>
+        <div id="login-panel" class="login-panel" hidden>
+          <a id="login-link" class="primary-link" href="#" target="_blank" rel="noopener">Open Nuvio sign-in</a>
+          <div>Approval code: <strong id="login-code"></strong></div>
+          <p id="login-state" class="substatus">Waiting…</p>
+          <button id="approval-button" type="button" class="secondary">I’ve approved it, continue</button>
+          <details class="login-diagnostics">
+            <summary>Sign-in diagnostics</summary>
+            <p id="login-diagnostics">No approval checks yet.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="step-number">4</div>
+      <div class="step-content">
+        <h2>Choose the destination and make a backup</h2>
+        <p>The importer first reads and merges your existing Nuvio data. It will not replace your library with only the Trakt watchlist.</p>
+        <div id="profile-panel" hidden>
+          <label for="profile-select">Nuvio profile</label>
+          <select id="profile-select"></select>
+          <button id="prepare-button" type="button" disabled>Read and prepare Nuvio data</button>
+        </div>
+        <p id="remote-summary" class="substatus" hidden></p>
+        <button id="backup-button" type="button" class="secondary" disabled>Download pre-import backup</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="step-number">5</div>
+      <div class="step-content">
+        <h2>Import and verify</h2>
+        <p>The final step uploads through Nuvio’s official sync functions, then reads everything back and checks every imported content key.</p>
+        <button id="import-button" type="button" class="import-button" disabled>Import into Nuvio Sync</button>
+        <div id="success-panel" class="success-panel" hidden>
+          <h3>Import verified</h3>
+          <p id="success-summary"></p>
+          <ol>
+            <li>Close and reopen NuvioTV on your device.</li>
+            <li>Confirm the Library source and Watch Progress source are set to Nuvio/Local, not Trakt.</li>
+            <li>Run Sync now if the rows do not refresh immediately.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div>Built against NuvioTV commit <code id="repo-commit"></code>. No Trakt login or OAuth token is used.</div>
+      <nav aria-label="Project links">
+        <a href="https://github.com/YungZanji/nuvio-trakt-importer" target="_blank" rel="noopener noreferrer">Source code</a>
+        <a href="https://github.com/YungZanji/nuvio-trakt-importer/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy</a>
+        <a href="https://github.com/YungZanji/nuvio-trakt-importer/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">Security</a>
+      </nav>
+    </footer>
+  </main>
+  <script type="module">/* APP_JS */</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "nuvio-trakt-importer",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "verify:bundle": "node test/verify-bundle.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.6"
+  }
+}

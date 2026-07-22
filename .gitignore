@@ -1,0 +1,9 @@
+node_modules/
+.build/
+_site/
+Nuvio-Trakt-Importer*.html
+Nuvio-Trakt-Importer-Source.zip
+Trakt-Export-Preflight-Audit.json
+*.trakt.zip
+*.backup.json
+*.audit.json
