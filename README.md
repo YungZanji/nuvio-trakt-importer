@@ -1,6 +1,6 @@
 # Nuvio Trakt Importer
 
-A private, browser-only tool for importing a standard Trakt export into Nuvio Sync without connecting a Trakt account.
+A private, browser-only tool for importing a standard Trakt export (.json) into Nuvio Sync without connecting a Trakt account.
 
 ## What it imports
 
