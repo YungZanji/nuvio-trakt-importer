@@ -2,12 +2,23 @@ import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { patchAppSource } from "./src/patch-app-source.mjs";
 
 const root = resolve(import.meta.dirname);
-const outJs = resolve(root, ".build/app.js");
+const buildDir = resolve(root, ".build");
+const appEntry = resolve(buildDir, "app-entry.mjs");
+const outJs = resolve(buildDir, "app.js");
+
+await mkdir(buildDir, { recursive: true });
+const originalApp = await readFile(resolve(root, "src/app.mjs"), "utf8");
+const patchedApp = patchAppSource(originalApp).replace(
+  "__TMDB_READ_ACCESS_TOKEN__",
+  JSON.stringify(process.env.TMDB_READ_ACCESS_TOKEN || ""),
+);
+await writeFile(appEntry, patchedApp);
 
 await build({
-  entryPoints: [resolve(root, "src/app.mjs")],
+  entryPoints: [appEntry],
   outfile: outJs,
   bundle: true,
   minify: true,
@@ -32,7 +43,7 @@ const csp = [
   `script-src 'sha256-${sha256(js)}'`,
   `style-src 'sha256-${sha256(bundledCss)}'`,
   "font-src data:",
-  "connect-src https://api.nuvio.tv https://api-two.nuvioapp.space https://v3-cinemeta.strem.io",
+  "connect-src https://api.nuvio.tv https://api-two.nuvioapp.space https://api.themoviedb.org https://v3-cinemeta.strem.io",
   "img-src data:",
   "base-uri 'none'",
   "form-action 'none'",
