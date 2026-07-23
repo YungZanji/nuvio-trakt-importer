@@ -14,10 +14,11 @@ assert.equal(html.includes("/* APP_"), false, "build placeholders remain");
 assert.match(style, /data:font\/woff2;base64,/);
 assert.equal(html.includes("fonts.googleapis.com"), false);
 assert.equal(html.includes("fonts.gstatic.com"), false);
+assert.equal(script.includes("images.metahub.space"), false, "MetaHub artwork must not be persisted by the built app");
 
 const digest = (value) => createHash("sha256").update(value).digest("base64");
 assert.ok(csp.includes(`script-src 'sha256-${digest(script)}'`), "script CSP hash mismatch");
 assert.ok(csp.includes(`style-src 'sha256-${digest(style)}'`), "style CSP hash mismatch");
-assert.ok(csp.includes("connect-src https://api.nuvio.tv https://api-two.nuvioapp.space https://v3-cinemeta.strem.io"));
+assert.ok(csp.includes("connect-src https://api.nuvio.tv https://api-two.nuvioapp.space https://api.themoviedb.org https://v3-cinemeta.strem.io"));
 
 console.log("Privacy-hardened bundle verification passed");
