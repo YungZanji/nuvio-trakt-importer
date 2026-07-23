@@ -71,17 +71,21 @@
       <div class="step-number">2</div>
       <div class="step-content">
         <h2>Resolve artwork and exact resume times</h2>
-        <p>Trakt exports playback as a percentage, while Nuvio Sync stores milliseconds. This lookup converts each percentage using the title’s runtime and fills your watchlist artwork.</p>
+        <p>Trakt exports playback as a percentage, while Nuvio Sync stores milliseconds. The lookup converts each percentage using the title or episode runtime and fills watchlist artwork.</p>
         <label id="metadata-consent-row" class="consent" hidden>
           <input id="metadata-consent" type="checkbox">
-          <span>Allow public IMDb IDs only to be sent to Cinemeta for artwork and runtime. The ZIP, account, watch timestamps, ratings, and playback percentages are never sent.</span>
+          <span>Allow public movie/TV IDs and episode numbers to be sent for metadata lookup. TMDB is used first. Cinemeta is used only as a fallback when TMDB is unavailable or incomplete. Your ZIP, Nuvio account, timestamps, ratings, and playback percentages are never sent.</span>
         </label>
         <button id="metadata-button" type="button" disabled>Resolve metadata</button>
         <p id="metadata-state" class="substatus"></p>
+        <details>
+          <summary>Metadata fallback order</summary>
+          <p><strong>1. TMDB:</strong> artwork and runtime. <strong>2. Cinemeta:</strong> runtime/metadata fallback only. <strong>3. Manual runtime:</strong> only when neither service can resolve it. MetaHub artwork is never saved into Nuvio.</p>
+        </details>
 
         <div id="unresolved-section" hidden>
           <h3>Runtime needed</h3>
-          <p>Cinemeta could not resolve these titles. Enter the runtime in minutes, or use a clearly marked estimate.</p>
+          <p>The metadata providers could not resolve these runtimes. Enter the runtime in minutes, or use a clearly marked estimate.</p>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Title</th><th>Item</th><th>Minutes</th></tr></thead>
