@@ -69,6 +69,12 @@ export function patchAppSource(source) {
   );
   output = replaceOnce(
     output,
+    '    setStatus("Please approve the metadata lookup first. Only public IMDb IDs are sent, never your ZIP, Nuvio account, timestamps, or ratings.", "error");\n',
+    '    setStatus("Please approve the metadata lookup first. Only public media IDs and episode numbers are sent, never your ZIP, Nuvio account, timestamps, ratings, or playback percentages.", "error");\n',
+    "metadata consent status",
+  );
+  output = replaceOnce(
+    output,
     '        provider: "Cinemeta (public IMDb metadata)",\n',
     '        provider: "TMDB primary; Cinemeta runtime/metadata fallback; MetaHub artwork disabled",\n',
     "audit provider label",
