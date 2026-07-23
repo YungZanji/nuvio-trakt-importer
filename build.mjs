@@ -6,7 +6,6 @@ import { patchAppSource } from "./src/patch-app-source.mjs";
 
 const root = resolve(import.meta.dirname);
 const buildDir = resolve(root, ".build");
-const appEntry = resolve(buildDir, "app-entry.mjs");
 const outJs = resolve(buildDir, "app.js");
 
 await mkdir(buildDir, { recursive: true });
@@ -15,10 +14,14 @@ const patchedApp = patchAppSource(originalApp).replace(
   "__TMDB_READ_ACCESS_TOKEN__",
   JSON.stringify(process.env.TMDB_READ_ACCESS_TOKEN || ""),
 );
-await writeFile(appEntry, patchedApp);
 
 await build({
-  entryPoints: [appEntry],
+  stdin: {
+    contents: patchedApp,
+    resolveDir: resolve(root, "src"),
+    sourcefile: "app.mjs",
+    loader: "js",
+  },
   outfile: outJs,
   bundle: true,
   minify: true,
