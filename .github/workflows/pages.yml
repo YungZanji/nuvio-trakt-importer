@@ -27,8 +27,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-        env:
-          TMDB_READ_ACCESS_TOKEN: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
       - run: npm test
       - run: npm run verify:bundle
       - uses: actions/configure-pages@v5
