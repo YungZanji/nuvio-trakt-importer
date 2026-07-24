@@ -127,6 +127,15 @@ function mergeMetadata(primary, fallback) {
   };
 }
 
+export async function resolveTmdbMetadata(item, {
+  tmdbReadAccessToken = "",
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (typeof fetchImpl !== "function") throw new Error("fetch is unavailable");
+  if (!tmdbReadAccessToken) throw new Error("TMDB API Read Access Token is required");
+  return fetchTmdb(item, tmdbReadAccessToken, fetchImpl);
+}
+
 export async function resolveMetadata(item, {
   tmdbReadAccessToken = "",
   cinemetaBase = "https://v3-cinemeta.strem.io",
