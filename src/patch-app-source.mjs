@@ -15,14 +15,14 @@ export function patchAppSource(source) {
   );
   output = replaceOnce(
     output,
-    'const REQUEST_TIMEOUT_MS = 15_000;\n',
-    'const REQUEST_TIMEOUT_MS = 15_000;\nconst TMDB_READ_ACCESS_TOKEN = __TMDB_READ_ACCESS_TOKEN__;\n',
-    "TMDB deployment token",
+    '  metadataById: new Map(),\n',
+    '  metadataById: new Map(),\n  tmdbReadAccessToken: null,\n',
+    "in-memory TMDB token state",
   );
   output = replaceOnce(
     output,
     `async function fetchCinemeta(item) {\n  if (!item.content_id?.startsWith("tt")) return null;\n  const type = item.content_type === "movie" ? "movie" : "series";\n  const response = await fetch(\`${'${CINEMETA_BASE}'}/meta/${'${type}'}/${'${encodeURIComponent(item.content_id)}'}.json\`);\n  if (!response.ok) throw new Error(\`Cinemeta ${'${response.status}'}\`);\n  const body = await response.json();\n  return body?.meta ?? null;\n}\n`,
-    `async function fetchCinemeta(item) {\n  return resolveMetadata(item, {\n    tmdbReadAccessToken: TMDB_READ_ACCESS_TOKEN,\n    cinemetaBase: CINEMETA_BASE,\n  });\n}\n\nfunction metadataKey(item) {\n  const season = Number(item.season);\n  const episode = Number(item.episode);\n  return item.content_type === "series" && Number.isInteger(season) && Number.isInteger(episode)\n    ? \`${'${item.content_id}'}:s${'${season}'}e${'${episode}'}\`\n    : item.content_id;\n}\n`,
+    `async function fetchCinemeta(item) {\n  return resolveMetadata(item, {\n    tmdbReadAccessToken: state.tmdbReadAccessToken || "",\n    cinemetaBase: CINEMETA_BASE,\n  });\n}\n\nfunction metadataKey(item) {\n  const season = Number(item.season);\n  const episode = Number(item.episode);\n  return item.content_type === "series" && Number.isInteger(season) && Number.isInteger(episode)\n    ? \`${'${item.content_id}'}:s${'${season}'}e${'${episode}'}\`\n    : item.content_id;\n}\n`,
     "metadata lookup",
   );
   output = replaceOnce(
@@ -42,6 +42,18 @@ export function patchAppSource(source) {
     '    addon_base_url: item.addon_base_url || `${CINEMETA_BASE}/manifest.json`,\n',
     '    addon_base_url: item.addon_base_url || (imdbFallback ? `${CINEMETA_BASE}/manifest.json` : null),\n',
     "TMDB-only addon source",
+  );
+  output = replaceOnce(
+    output,
+    '    setStatus("Please approve the metadata lookup first. Only public IMDb IDs are sent, never your ZIP, Nuvio account, timestamps, or ratings.", "error");\n',
+    '    setStatus("Please approve the metadata lookup first. Only public media IDs and episode numbers are sent, never your ZIP, Nuvio account, timestamps, ratings, or playback percentages.", "error");\n',
+    "metadata consent status",
+  );
+  output = replaceOnce(
+    output,
+    '  const button = $("metadata-button");\n  setBusy(button, true, "Resolving metadata…");\n  try {\n',
+    '  const button = $("metadata-button");\n  state.tmdbReadAccessToken = $("tmdb-token")?.value.trim() || "";\n  setBusy(button, true, "Resolving metadata…");\n  try {\n',
+    "capture user TMDB token",
   );
   output = replaceOnce(
     output,
@@ -69,15 +81,27 @@ export function patchAppSource(source) {
   );
   output = replaceOnce(
     output,
-    '    setStatus("Please approve the metadata lookup first. Only public IMDb IDs are sent, never your ZIP, Nuvio account, timestamps, or ratings.", "error");\n',
-    '    setStatus("Please approve the metadata lookup first. Only public media IDs and episode numbers are sent, never your ZIP, Nuvio account, timestamps, ratings, or playback percentages.", "error");\n',
-    "metadata consent status",
+    '    $("metadata-state").textContent = state.unresolvedProgress.length\n      ? `${state.unresolvedProgress.length} resume item(s) still need a runtime.`\n      : `All ${state.plan.progress.length} resume positions have a runtime.`;\n',
+    '    const providerNote = state.tmdbReadAccessToken\n      ? " TMDB was used first; Cinemeta was available only as fallback."\n      : " Cinemeta-only mode was used; artwork may be incomplete without TMDB.";\n    $("metadata-state").textContent = (state.unresolvedProgress.length\n      ? `${state.unresolvedProgress.length} resume item(s) still need a runtime.`\n      : `All ${state.plan.progress.length} resume positions have a runtime.`) + providerNote;\n',
+    "metadata provider status",
+  );
+  output = replaceOnce(
+    output,
+    '  } finally {\n    setBusy(button, false);\n  }\n}\n\nfunction applyManualRuntimes',
+    '  } finally {\n    state.tmdbReadAccessToken = null;\n    if ($("tmdb-token")) $("tmdb-token").value = "";\n    setBusy(button, false);\n  }\n}\n\nfunction applyManualRuntimes',
+    "clear TMDB token after lookup",
   );
   output = replaceOnce(
     output,
     '        provider: "Cinemeta (public IMDb metadata)",\n',
-    '        provider: "TMDB primary; Cinemeta runtime/metadata fallback; MetaHub artwork disabled",\n',
+    '        provider: "User-supplied TMDB primary when provided; Cinemeta runtime/metadata fallback; MetaHub artwork disabled",\n',
     "audit provider label",
+  );
+  output = replaceOnce(
+    output,
+    '  state.token = null;\n  state.refreshToken = null;\n});\n',
+    '  state.token = null;\n  state.refreshToken = null;\n  state.tmdbReadAccessToken = null;\n  if ($("tmdb-token")) $("tmdb-token").value = "";\n});\n',
+    "clear TMDB token on unload",
   );
   return output;
 }
