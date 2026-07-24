@@ -29,6 +29,13 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run verify:bundle
+      - name: Upload testable PR preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-trakt-importer-preview
+          path: _site/index.html
+          if-no-files-found: error
       - uses: actions/configure-pages@v5
         if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3
