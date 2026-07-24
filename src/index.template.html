@@ -71,17 +71,28 @@
       <div class="step-number">2</div>
       <div class="step-content">
         <h2>Resolve artwork and exact resume times</h2>
-        <p>Trakt exports playback as a percentage, while Nuvio Sync stores milliseconds. This lookup converts each percentage using the title’s runtime and fills your watchlist artwork.</p>
+        <p>Trakt exports playback as a percentage, while Nuvio Sync stores milliseconds. The lookup converts each percentage using the title or episode runtime and fills watchlist artwork.</p>
+
+        <div class="metadata-provider">
+          <label for="tmdb-token">TMDB API Read Access Token <span>Recommended</span></label>
+          <input id="tmdb-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your own TMDB API Read Access Token">
+          <p>The importer never saves this token. It is held only for this lookup, sent directly from your browser to TMDB as the authorization header, then cleared from the page when the lookup finishes. It is never sent to GitHub, Nuvio, Cinemeta, or the project operator. <a href="https://developer.themoviedb.org/docs/authentication-application" target="_blank" rel="noopener noreferrer">How to get a TMDB read token</a>.</p>
+        </div>
+
         <label id="metadata-consent-row" class="consent" hidden>
           <input id="metadata-consent" type="checkbox">
-          <span>Allow public IMDb IDs only to be sent to Cinemeta for artwork and runtime. The ZIP, account, watch timestamps, ratings, and playback percentages are never sent.</span>
+          <span>Allow public movie/TV IDs and episode numbers to be sent for metadata lookup. If you supplied a TMDB token, TMDB is used first. Cinemeta is used only as a fallback. Your ZIP, Nuvio account, timestamps, ratings, and playback percentages are never sent.</span>
         </label>
         <button id="metadata-button" type="button" disabled>Resolve metadata</button>
         <p id="metadata-state" class="substatus"></p>
+        <details>
+          <summary>Metadata fallback order</summary>
+          <p><strong>1. TMDB, recommended:</strong> posters, backgrounds, metadata, and title/episode runtime using your own read token. <strong>2. Cinemeta:</strong> metadata/runtime fallback when TMDB is not used or cannot resolve an item. Cinemeta commonly references MetaHub artwork, which this importer intentionally rejects because those poster URLs have failed for some Nuvio users. That means Cinemeta-only mode can leave some posters blank. <strong>3. Manual runtime:</strong> only when neither provider can resolve the runtime. MetaHub artwork is never saved into Nuvio.</p>
+        </details>
 
         <div id="unresolved-section" hidden>
           <h3>Runtime needed</h3>
-          <p>Cinemeta could not resolve these titles. Enter the runtime in minutes, or use a clearly marked estimate.</p>
+          <p>The metadata providers could not resolve these runtimes. Enter the runtime in minutes, or use a clearly marked estimate.</p>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Title</th><th>Item</th><th>Minutes</th></tr></thead>
