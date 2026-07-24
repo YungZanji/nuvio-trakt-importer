@@ -1,4 +1,4 @@
-export const IMPORTER_VERSION = "1.1.0";
+export const IMPORTER_VERSION = "1.2.0";
 export const NUVIO_REPO_COMMIT = "a4e0c71678dc8364a4bf2175e8fa96c641da41d9";
 export const NUVIO_PUBLIC_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI";
 

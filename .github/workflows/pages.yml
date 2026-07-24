@@ -26,9 +26,38 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm test
-      - run: npm run verify:bundle
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build.log
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test.log
+      - name: Verify bundle
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run verify:bundle 2>&1 | tee verify.log
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-build-diagnostics
+          path: |
+            build.log
+            test.log
+            verify.log
+          if-no-files-found: ignore
+      - name: Upload testable PR preview
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-trakt-importer-preview
+          path: _site/index.html
+          if-no-files-found: error
       - uses: actions/configure-pages@v5
         if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3

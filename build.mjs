@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { patchAppSource } from "./src/patch-app-source.mjs";
+import { patchAppSource } from "./src/app-transform.mjs";
 
 const root = resolve(import.meta.dirname);
 const buildDir = resolve(root, ".build");
@@ -36,7 +36,7 @@ const [template, css, js, packageText, font] = await Promise.all([
 ]);
 
 const fontData = `data:font/woff2;base64,${font.toString("base64")}`;
-const bundledCss = css.replace("__GOOGLE_SANS_FLEX_DATA__", fontData);
+const bundledCss = css.replace("__GOOGLE_SANS_FLEX_DATA__", () => fontData);
 const sha256 = (value) => createHash("sha256").update(value).digest("base64");
 const csp = [
   "default-src 'none'",
@@ -52,9 +52,9 @@ const csp = [
   "worker-src 'none'",
 ].join("; ");
 const html = template
-  .replace("/* APP_CSP */", csp)
-  .replace("/* APP_CSS */", bundledCss)
-  .replace("/* APP_JS */", js);
+  .replace("/* APP_CSP */", () => csp)
+  .replace("/* APP_CSS */", () => bundledCss)
+  .replace("/* APP_JS */", () => js);
 const version = JSON.parse(packageText).version;
 const siteDir = resolve(root, "_site");
 await mkdir(siteDir, { recursive: true });
