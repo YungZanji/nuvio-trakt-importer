@@ -10,10 +10,7 @@ const outJs = resolve(buildDir, "app.js");
 
 await mkdir(buildDir, { recursive: true });
 const originalApp = await readFile(resolve(root, "src/app.mjs"), "utf8");
-const patchedApp = patchAppSource(originalApp).replace(
-  "__TMDB_READ_ACCESS_TOKEN__",
-  JSON.stringify(process.env.TMDB_READ_ACCESS_TOKEN || ""),
-);
+const patchedApp = patchAppSource(originalApp);
 
 await build({
   stdin: {
