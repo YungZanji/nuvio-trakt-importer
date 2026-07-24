@@ -45,7 +45,7 @@
       <div class="step-number">1</div>
       <div class="step-content">
         <h2>Choose your Trakt export</h2>
-        <p>Select the original ZIP from Trakt. The importer reads it locally and deduplicates repeated plays into Nuvio’s watched-state model.</p>
+        <p>Select the original ZIP from Trakt. The importer reads it locally and deduplicates repeated plays into Nuvio’s watched-state model. A ZIP is not required if you only want to repair existing Nuvio artwork.</p>
         <label class="file-picker">
           <input id="zip-input" type="file" accept=".zip,application/zip">
           <span>Choose Trakt ZIP</span>
@@ -61,7 +61,7 @@
           <p id="plan-warnings" class="inline-warning" hidden></p>
           <details>
             <summary>Other records retained in the original ZIP</summary>
-            <p><span id="count-ratings">0</span> personal ratings and <span id="count-lists">0</span> personal/managed lists cannot be represented by Nuvio Sync’s current local schema. They are not discarded or flattened into the wrong category; they remain in your source ZIP and are documented in the audit.</p>
+            <p><span id="count-ratings">0</span> personal ratings and <span id="count-lists">0</span> personal/managed lists cannot be represented by Nuvio Sync’s current local schema. They remain in your source ZIP and are documented in the audit.</p>
           </details>
         </div>
       </div>
@@ -76,18 +76,18 @@
         <div class="metadata-provider">
           <label for="tmdb-token">TMDB API Read Access Token <span>Recommended</span></label>
           <input id="tmdb-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your own TMDB API Read Access Token">
-          <p>The importer never saves this token. It is held only for this lookup, sent directly from your browser to TMDB as the authorization header, then cleared from the page when the lookup finishes. It is never sent to GitHub, Nuvio, Cinemeta, or the project operator. <a href="https://developer.themoviedb.org/docs/authentication-application" target="_blank" rel="noopener noreferrer">How to get a TMDB read token</a>.</p>
+          <p>The importer never saves this token. It is held only for this lookup, sent directly from your browser to TMDB, then cleared. <a href="https://developer.themoviedb.org/docs/authentication-application" target="_blank" rel="noopener noreferrer">How to get a TMDB read token</a>.</p>
         </div>
 
         <label id="metadata-consent-row" class="consent" hidden>
           <input id="metadata-consent" type="checkbox">
-          <span>Allow public movie/TV IDs and episode numbers to be sent for metadata lookup. If you supplied a TMDB token, TMDB is used first. Cinemeta is used only as a fallback. Your ZIP, Nuvio account, timestamps, ratings, and playback percentages are never sent.</span>
+          <span>Allow public movie/TV IDs and episode numbers to be sent for metadata lookup. TMDB is used first when you supply your token; Cinemeta is fallback only. Your ZIP, account, timestamps, ratings, and playback percentages are never sent.</span>
         </label>
         <button id="metadata-button" type="button" disabled>Resolve metadata</button>
         <p id="metadata-state" class="substatus"></p>
         <details>
           <summary>Metadata fallback order</summary>
-          <p><strong>1. TMDB, recommended:</strong> posters, backgrounds, metadata, and title/episode runtime using your own read token. <strong>2. Cinemeta:</strong> metadata/runtime fallback when TMDB is not used or cannot resolve an item. Cinemeta commonly references MetaHub artwork, which this importer intentionally rejects because those poster URLs have failed for some Nuvio users. That means Cinemeta-only mode can leave some posters blank. <strong>3. Manual runtime:</strong> only when neither provider can resolve the runtime. MetaHub artwork is never saved into Nuvio.</p>
+          <p><strong>1. TMDB, recommended:</strong> posters, backgrounds, metadata, and runtime using your own read token. <strong>2. Cinemeta:</strong> metadata/runtime fallback. MetaHub artwork returned by Cinemeta is intentionally rejected, so Cinemeta-only mode can leave some posters blank. <strong>3. Manual runtime:</strong> only when neither provider can resolve runtime.</p>
         </details>
 
         <div id="unresolved-section" hidden>
@@ -111,8 +111,8 @@
       <div class="step-number">3</div>
       <div class="step-content">
         <h2>Sign in to Nuvio Sync</h2>
-        <p>This uses Nuvio’s own TV sign-in flow. Your access token stays in this tab and is cleared when you close it.</p>
-        <button id="login-button" type="button" disabled>Start Nuvio sign-in</button>
+        <p>This uses Nuvio’s own TV sign-in flow. Your access token stays in this tab and is cleared when you close it. You can sign in without choosing a Trakt ZIP when using artwork repair only.</p>
+        <button id="login-button" type="button">Start Nuvio sign-in</button>
         <div id="login-panel" class="login-panel" hidden>
           <a id="login-link" class="primary-link" href="#" target="_blank" rel="noopener">Open Nuvio sign-in</a>
           <div>Approval code: <strong id="login-code"></strong></div>
@@ -129,24 +129,90 @@
     <section>
       <div class="step-number">4</div>
       <div class="step-content">
-        <h2>Choose the destination and make a backup</h2>
-        <p>The importer first reads and merges your existing Nuvio data. It will not replace your library with only the Trakt watchlist.</p>
+        <h2>Read your Nuvio data and choose what happens</h2>
+        <p>The importer reads the selected Nuvio profile first so it can show exactly how each strategy would change it. A backup is required before any write.</p>
         <div id="profile-panel" hidden>
           <label for="profile-select">Nuvio profile</label>
           <select id="profile-select"></select>
-          <button id="prepare-button" type="button" disabled>Read and prepare Nuvio data</button>
+          <button id="prepare-button" type="button" disabled>Read Nuvio data</button>
         </div>
         <p id="remote-summary" class="substatus" hidden></p>
-        <button id="backup-button" type="button" class="secondary" disabled>Download pre-import backup</button>
+        <button id="backup-button" type="button" class="secondary" disabled>Download pre-change backup</button>
+
+        <div id="strategy-panel" class="strategy-panel" hidden>
+          <h3>How should the Trakt import merge with Nuvio?</h3>
+          <p class="strategy-intro">Choose the behavior that matches how you use the two services. The projected changes update instantly.</p>
+          <div class="strategy-grid" role="radiogroup" aria-label="Import strategy">
+            <label class="strategy-card" data-mode="add_only">
+              <input type="radio" name="import-mode" value="add_only">
+              <span class="strategy-badge safe">SAFE</span>
+              <strong>Only bring new items</strong>
+              <span class="strategy-copy">Adds items from Trakt only when they do not already exist in Nuvio. Existing items stay as-is.</span>
+              <span class="strategy-rule plus">＋ New items are added</span>
+              <span class="strategy-rule lock">● Existing items stay as-is</span>
+              <span class="strategy-rule neutral">− Nothing is removed</span>
+            </label>
+
+            <label class="strategy-card recommended" data-mode="merge_newer">
+              <input type="radio" name="import-mode" value="merge_newer" checked>
+              <span class="strategy-badge recommended-badge">RECOMMENDED</span>
+              <strong>Merge & refresh</strong>
+              <span class="strategy-copy">Adds new items, refreshes useful library metadata, and keeps the newest watched and Continue Watching timestamps.</span>
+              <span class="strategy-rule plus">＋ New items are added</span>
+              <span class="strategy-rule refresh">↻ Existing items refresh when useful/newer</span>
+              <span class="strategy-rule neutral">− Nothing is removed</span>
+            </label>
+
+            <label class="strategy-card" data-mode="mirror">
+              <input type="radio" name="import-mode" value="mirror">
+              <span class="strategy-badge advanced">ADVANCED</span>
+              <strong>Mirror the Trakt import</strong>
+              <span class="strategy-copy">Makes Nuvio Library, watched status, and Continue Watching match the imported Trakt set.</span>
+              <span class="strategy-rule plus">＋ New items are added</span>
+              <span class="strategy-rule refresh">↻ Existing items are updated</span>
+              <span class="strategy-rule remove">− Missing imported items are removed</span>
+            </label>
+
+            <label class="strategy-card danger" data-mode="fresh">
+              <input type="radio" name="import-mode" value="fresh">
+              <span class="strategy-badge danger-badge">DANGER</span>
+              <strong>Reset tracking data & import fresh</strong>
+              <span class="strategy-copy">Clears only the Nuvio tracking data managed here, verifies it is empty, then rebuilds it from this Trakt export.</span>
+              <span class="strategy-rule remove">⌫ Library is cleared</span>
+              <span class="strategy-rule remove">⌫ Watched + Continue Watching are cleared</span>
+              <span class="strategy-rule plus">＋ Trakt data is rebuilt from fresh</span>
+            </label>
+          </div>
+
+          <div id="strategy-preview" class="strategy-preview"></div>
+          <div id="destructive-confirmation" class="danger-confirm" hidden>
+            <strong id="danger-confirm-title">Confirmation required</strong>
+            <p id="danger-confirm-copy"></p>
+            <label for="danger-confirm-input">Type <code id="danger-confirm-word"></code> to enable this operation</label>
+            <input id="danger-confirm-input" type="text" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+
+        <div id="artwork-repair-panel" class="repair-panel" hidden>
+          <div>
+            <span class="strategy-badge repair-badge">REPAIR TOOL</span>
+            <h3>Fix Nuvio posters without importing Trakt</h3>
+            <p>Refreshes poster and background URLs for compatible items already in your Nuvio Library using TMDB. It does not change Library membership, watched status, Continue Watching, or timestamps.</p>
+          </div>
+          <label for="repair-tmdb-token">Your TMDB API Read Access Token</label>
+          <input id="repair-tmdb-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your own TMDB read token">
+          <button id="repair-artwork-button" type="button" class="secondary" disabled>Repair existing artwork</button>
+          <p id="repair-state" class="substatus"></p>
+        </div>
       </div>
     </section>
 
     <section>
       <div class="step-number">5</div>
       <div class="step-content">
-        <h2>Import and verify</h2>
-        <p>The final step uploads through Nuvio’s official sync functions, then reads everything back and checks every imported content key.</p>
-        <button id="import-button" type="button" class="import-button" disabled>Import into Nuvio Sync</button>
+        <h2>Apply and verify</h2>
+        <p>The importer applies only the selected strategy, then reads Nuvio Sync back and verifies the resulting keys. Destructive strategies require an additional typed confirmation.</p>
+        <button id="import-button" type="button" class="import-button" disabled>Apply selected import</button>
         <div id="success-panel" class="success-panel" hidden>
           <h3>Import verified</h3>
           <p id="success-summary"></p>
