@@ -27,19 +27,30 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build
-        id: app-build
         shell: bash
         run: |
           set -o pipefail
           npm run build 2>&1 | tee build.log
-      - name: Upload build diagnostics
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test.log
+      - name: Verify bundle
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run verify:bundle 2>&1 | tee verify.log
+      - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: preview-build-diagnostics
-          path: build.log
-      - run: npm test
-      - run: npm run verify:bundle
+          path: |
+            build.log
+            test.log
+            verify.log
+          if-no-files-found: ignore
       - name: Upload testable PR preview
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
