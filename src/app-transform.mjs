@@ -26,7 +26,7 @@ export function patchAppSource(source) {
         const libraryCheck = await pullLibrary(profileId);
         const mirrorLibraryCheck = compareKeySets(libraryCheck, strategy.library.target, libraryKey);
         if (mirrorLibraryCheck.missing.length || mirrorLibraryCheck.extra.length) {
-          throw new Error(`Nuvio did not produce the requested Library mirror (missing ${mirrorLibraryCheck.missing.length}, extra ${mirrorLibraryCheck.extra.length}). Watched and Continue Watching removals were not started.`);
+          throw new Error("Nuvio did not produce the requested Library mirror (missing " + mirrorLibraryCheck.missing.length + ", extra " + mirrorLibraryCheck.extra.length + "). Watched and Continue Watching removals were not started.");
         }
       }
       if (strategy.watched.deletes.length) {
