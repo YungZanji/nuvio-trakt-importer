@@ -63,6 +63,13 @@ button.secondary { background: #2a3040; }
 details { color: #b2b8c5; }
 details summary { color: #d9ddea; cursor: pointer; }
 
+.metadata-provider { display: grid; gap: 8px; margin: 16px 0; padding: 14px; background: #11141b; border: 1px solid #2e3442; border-radius: 12px; }
+.metadata-provider label { color: #e2e5ed; font-weight: 700; }
+.metadata-provider label span { display: inline-block; margin-left: 6px; padding: 3px 7px; color: #9de1bf; background: rgba(35, 101, 73, .18); border: 1px solid #2d684f; border-radius: 99px; font-size: .72rem; vertical-align: middle; }
+.metadata-provider p { margin: 0; font-size: .86rem; }
+.metadata-provider a { color: #a89bff; }
+.metadata-provider input { width: 100%; }
+
 .consent { display: flex; gap: 10px; padding: 14px; margin: 16px 0; background: #11141b; border: 1px solid #2e3442; border-radius: 12px; color: #cbd0db; line-height: 1.45; }
 .consent input { width: 18px; height: 18px; margin-top: 2px; accent-color: #755dff; flex: 0 0 auto; }
 .substatus { min-height: 1.2em; font-size: .9rem; }
@@ -76,7 +83,7 @@ details summary { color: #d9ddea; cursor: pointer; }
 
 #profile-panel { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin: 15px 0; }
 #profile-panel label { width: 100%; color: #cbd0db; font-size: .9rem; }
-select, input[type="number"] { min-height: 42px; padding: 9px 11px; color: #f4f5f8; background: #10131a; border: 1px solid #343b4d; border-radius: 9px; font: inherit; }
+select, input[type="number"], input[type="password"] { min-height: 42px; padding: 9px 11px; color: #f4f5f8; background: #10131a; border: 1px solid #343b4d; border-radius: 9px; font: inherit; }
 select { min-width: 240px; }
 
 .table-wrap { overflow-x: auto; }
