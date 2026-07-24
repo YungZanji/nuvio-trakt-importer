@@ -26,7 +26,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
+      - name: Build
+        id: app-build
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build.log
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-build-diagnostics
+          path: build.log
       - run: npm test
       - run: npm run verify:bundle
       - name: Upload testable PR preview
