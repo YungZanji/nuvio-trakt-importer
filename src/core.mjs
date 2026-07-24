@@ -1,4 +1,4 @@
-export const IMPORTER_VERSION = "1.1.0";
+export const IMPORTER_VERSION = "1.2.0";
 export const NUVIO_REPO_COMMIT = "a4e0c71678dc8364a4bf2175e8fa96c641da41d9";
 export const NUVIO_PUBLIC_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI";
 
@@ -33,300 +33,244 @@ export function parseTimestamp(value) {
   return Number.isFinite(time) ? time : 0;
 }
 
-export function mediaIdentity(item) {
-  if (!item || typeof item !== "object") return null;
-  if (item.type === "movie" && item.movie) {
-    return {
-      type: "movie",
-      contentType: "movie",
-      media: item.movie,
-      ids: item.movie.ids ?? {},
-      title: item.movie.title || "Untitled movie",
-      year: item.movie.year ?? null,
-    };
+export function newest(items, getTime) {
+  return items.reduce((best, item) => !best || getTime(item) > getTime(best) ? item : best, null);
+}
+
+function stripPrivateFields(value) {
+  if (Array.isArray(value)) return value.map(stripPrivateFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !key.startsWith("_"))
+      .map(([key, child]) => [key, stripPrivateFields(child)]),
+  );
+}
+
+function jsonFile(parsed, candidates) {
+  for (const candidate of candidates) {
+    if (parsed.has(candidate)) return parsed.get(candidate);
   }
-  if ((item.type === "show" || item.type === "series") && item.show) {
-    return {
-      type: "show",
-      contentType: "series",
-      media: item.show,
-      ids: item.show.ids ?? {},
-      title: item.show.title || "Untitled series",
-      year: item.show.year ?? null,
-    };
-  }
-  return null;
+  return [];
 }
 
-function chooseNewer(existing, candidate, field) {
-  if (!existing) return candidate;
-  return Number(candidate[field] ?? 0) > Number(existing[field] ?? 0) ? candidate : existing;
-}
-
-function libraryKey(item) {
-  return `${String(item.content_type).toLowerCase()}|${item.content_id}`;
-}
-
-function watchedKey(item) {
-  return `${item.content_id}|${item.season ?? ""}|${item.episode ?? ""}`;
-}
-
-function progressKey(item) {
-  return item.progress_key || (item.season != null && item.episode != null
-    ? `${item.content_id}_s${item.season}e${item.episode}`
-    : item.content_id);
-}
-
-function mapLibraryItem(item, missingIds) {
-  const identity = mediaIdentity(item);
-  if (!identity) return null;
-  const contentId = normalizeContentId(identity.ids);
-  if (!contentId) {
-    missingIds.push({ category: "watchlist", title: identity.title, year: identity.year });
-    return null;
-  }
+function idBundle(entry) {
+  const ids = entry?.ids ?? entry?.movie?.ids ?? entry?.show?.ids ?? entry?.episode?.ids ?? {};
   return {
-    content_id: contentId,
-    content_type: identity.contentType,
-    name: identity.title,
-    poster: null,
-    poster_shape: "POSTER",
-    background: null,
-    description: null,
-    release_info: identity.year != null ? String(identity.year) : null,
-    imdb_rating: null,
-    genres: [],
-    addon_base_url: null,
-    added_at: parseTimestamp(item.listed_at),
-    _ids: identity.ids,
+    trakt: Number.isFinite(Number(ids.trakt)) ? Number(ids.trakt) : null,
+    imdb: typeof ids.imdb === "string" && ids.imdb.trim() ? ids.imdb.trim() : null,
+    tmdb: Number.isFinite(Number(ids.tmdb)) ? Number(ids.tmdb) : null,
   };
 }
 
-function mapWatchedMovie(entry, missingIds) {
-  const movie = entry?.movie;
-  if (!movie) return null;
-  const contentId = normalizeContentId(movie.ids ?? {});
-  if (!contentId) {
-    missingIds.push({ category: "watched_movie", title: movie.title, year: movie.year });
-    return null;
-  }
-  return {
-    content_id: contentId,
-    content_type: "movie",
-    title: movie.title || contentId,
-    season: null,
-    episode: null,
-    watched_at: parseTimestamp(entry.last_watched_at || entry.last_updated_at),
-  };
+function titleFor(entry, fallback = "Unknown") {
+  return entry?.title ?? entry?.movie?.title ?? entry?.show?.title ?? entry?.episode?.title ?? fallback;
 }
 
-function mapWatchedEpisode(entry, missingIds) {
-  if (entry?.type !== "episode" || !entry.episode || !entry.show) return null;
-  const season = Number(entry.episode.season);
-  const episode = Number(entry.episode.number);
-  if (!Number.isInteger(season) || !Number.isInteger(episode)) return null;
-  const contentId = normalizeContentId(entry.show.ids ?? {});
-  if (!contentId) {
-    missingIds.push({
-      category: "watched_episode",
-      title: entry.show.title,
-      year: entry.show.year,
+function libraryFromWatchlist(parsed, problems) {
+  const rows = asArray(jsonFile(parsed, ["watchlist.json", "watchlist_movies.json", "watchlist_shows.json"]));
+  const results = [];
+  for (const entry of rows) {
+    const source = entry.movie ?? entry.show ?? entry;
+    const ids = idBundle(source);
+    const contentId = normalizeContentId(ids);
+    if (!contentId) {
+      problems.push({ category: "library", title: titleFor(source), reason: "No IMDb/TMDB/Trakt content ID" });
+      continue;
+    }
+    const type = entry.show || source.type === "show" || source.type === "series" ? "series" : "movie";
+    results.push({
+      content_id: contentId,
+      content_type: type,
+      name: titleFor(source),
+      poster: null,
+      poster_shape: "POSTER",
+      background: null,
+      description: null,
+      release_info: String(source.year ?? "") || null,
+      imdb_rating: null,
+      genres: [],
+      addon_base_url: null,
+      added_at: parseTimestamp(entry.listed_at ?? entry.created_at) || Date.now(),
+      _ids: ids,
+      _source: "Trakt watchlist",
+    });
+  }
+  return dedupeLibrary(results);
+}
+
+function dedupeLibrary(items) {
+  const map = new Map();
+  for (const item of items) map.set(`${item.content_type}|${item.content_id}`, item);
+  return [...map.values()];
+}
+
+function historyRows(parsed) {
+  const all = [];
+  for (const [name, value] of parsed.entries()) {
+    if (!name.toLowerCase().includes("history")) continue;
+    if (Array.isArray(value)) all.push(...value);
+  }
+  return all;
+}
+
+function watchedFromHistory(parsed, problems) {
+  const map = new Map();
+  for (const entry of historyRows(parsed)) {
+    const isEpisode = Boolean(entry.episode);
+    const parent = isEpisode ? entry.show : (entry.movie ?? entry);
+    const ids = idBundle(parent);
+    const contentId = normalizeContentId(ids);
+    if (!contentId) {
+      problems.push({ category: "watched", title: titleFor(parent), reason: "No stable show/movie ID" });
+      continue;
+    }
+    const season = isEpisode ? Number(entry.episode?.season) : null;
+    const episode = isEpisode ? Number(entry.episode?.number) : null;
+    if (isEpisode && (!Number.isInteger(season) || !Number.isInteger(episode))) {
+      problems.push({ category: "watched", title: titleFor(entry.episode), reason: "Episode is missing season/episode coordinates" });
+      continue;
+    }
+    const item = {
+      content_id: contentId,
+      content_type: isEpisode ? "series" : "movie",
+      title: titleFor(parent),
       season,
       episode,
-    });
-    return null;
+      watched_at: parseTimestamp(entry.watched_at ?? entry.last_watched_at ?? entry.updated_at) || Date.now(),
+      _ids: ids,
+    };
+    const key = `${contentId}|${season ?? ""}|${episode ?? ""}`;
+    if (!map.has(key) || item.watched_at > map.get(key).watched_at) map.set(key, item);
   }
-  return {
-    content_id: contentId,
-    content_type: "series",
-    title: entry.show.title || contentId,
-    season,
-    episode,
-    watched_at: parseTimestamp(entry.watched_at),
-  };
+  return [...map.values()];
 }
 
-function mapPlaybackItem(entry, missingIds) {
-  const identity = entry?.type === "episode"
-    ? mediaIdentity({ type: "show", show: entry.show })
-    : mediaIdentity({ type: "movie", movie: entry.movie });
-  if (!identity) return null;
-  const contentId = normalizeContentId(identity.ids);
-  if (!contentId) {
-    missingIds.push({ category: "playback", title: identity.title, year: identity.year });
-    return null;
+function playbackRows(parsed) {
+  const all = [];
+  for (const [name, value] of parsed.entries()) {
+    const lower = name.toLowerCase();
+    if (!lower.includes("playback") && !lower.includes("progress")) continue;
+    if (Array.isArray(value)) all.push(...value);
   }
-  const percent = Number(entry.progress);
-  if (!Number.isFinite(percent) || percent <= 0 || percent >= 100) return null;
-  const season = entry.type === "episode" ? Number(entry.episode?.season) : null;
-  const episode = entry.type === "episode" ? Number(entry.episode?.number) : null;
-  if (entry.type === "episode" && (!Number.isInteger(season) || !Number.isInteger(episode))) return null;
-  const videoId = entry.type === "episode" ? `${contentId}:${season}:${episode}` : contentId;
-  return {
-    content_id: contentId,
-    content_type: identity.contentType,
-    video_id: videoId,
-    season,
-    episode,
-    position: 0,
-    duration: 0,
-    last_watched: parseTimestamp(entry.paused_at),
-    progress_key: entry.type === "episode" ? `${contentId}_s${season}e${episode}` : contentId,
-    _progress_percent: Math.max(0, Math.min(100, percent)),
-    _name: identity.title,
-    _year: identity.year,
-    _ids: identity.ids,
-    _episode_title: entry.episode?.title ?? null,
-  };
+  return all;
 }
 
-function listFiles(parsed, regex) {
-  return [...parsed.entries()]
-    .filter(([name]) => regex.test(name))
-    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-    .flatMap(([, value]) => asArray(value));
+function progressFromPlayback(parsed, problems) {
+  const map = new Map();
+  for (const entry of playbackRows(parsed)) {
+    const isEpisode = Boolean(entry.episode);
+    const parent = isEpisode ? entry.show : (entry.movie ?? entry);
+    const ids = idBundle(parent);
+    const contentId = normalizeContentId(ids);
+    const percent = Number(entry.progress ?? entry.percent ?? entry.percentage);
+    if (!contentId || !Number.isFinite(percent) || percent <= 0 || percent >= 100) continue;
+    const season = isEpisode ? Number(entry.episode?.season) : null;
+    const episode = isEpisode ? Number(entry.episode?.number) : null;
+    if (isEpisode && (!Number.isInteger(season) || !Number.isInteger(episode))) {
+      problems.push({ category: "progress", title: titleFor(entry.episode), reason: "Episode is missing season/episode coordinates" });
+      continue;
+    }
+    const item = {
+      content_id: contentId,
+      content_type: isEpisode ? "series" : "movie",
+      video_id: isEpisode ? `${contentId}:${season}:${episode}` : contentId,
+      season,
+      episode,
+      position: 0,
+      duration: 0,
+      last_watched: parseTimestamp(entry.paused_at ?? entry.updated_at ?? entry.last_watched_at) || Date.now(),
+      progress_key: isEpisode ? `${contentId}_s${season}e${episode}` : contentId,
+      _percent: percent,
+      _ids: ids,
+      _name: isEpisode ? `${titleFor(parent)} S${season}E${episode}` : titleFor(parent),
+    };
+    const key = item.progress_key;
+    if (!map.has(key) || item.last_watched > map.get(key).last_watched) map.set(key, item);
+  }
+  return [...map.values()];
 }
 
-function countUnsupported(parsed) {
-  const ratingFiles = ["ratings-movies.json", "ratings-shows.json", "ratings-seasons.json", "ratings-episodes.json"];
-  const socialPrefixes = /^(comments-|likes-|notes-|network-|hidden-)/;
-  const personalListItemFiles = [...parsed.keys()].filter((name) => /^lists-list-.*\.json$/i.test(name));
-  const personalListDefinitions = asArray(parsed.get("lists-lists.json"));
-  return {
-    ratings: ratingFiles.reduce((sum, name) => sum + asArray(parsed.get(name)).length, 0),
-    personalLists: personalListDefinitions.length,
-    personalListItems: personalListItemFiles.reduce((sum, name) => sum + asArray(parsed.get(name)).length, 0),
-    socialAndPreferenceRecords: [...parsed.entries()]
-      .filter(([name]) => socialPrefixes.test(name))
-      .reduce((sum, [, value]) => sum + (Array.isArray(value) ? value.length : value && typeof value === "object" ? Object.keys(value).length : 0), 0),
-  };
+function countRatings(parsed) {
+  let count = 0;
+  for (const [name, value] of parsed.entries()) {
+    if (name.toLowerCase().includes("rating") && Array.isArray(value)) count += value.length;
+  }
+  return count;
 }
 
-export function buildImportPlan(textFiles) {
+function countLists(parsed) {
+  let count = 0;
+  for (const [name, value] of parsed.entries()) {
+    if (name.toLowerCase().includes("list") && Array.isArray(value) && !name.toLowerCase().includes("watchlist")) count += value.length;
+  }
+  return count;
+}
+
+export function buildPlan(textFiles) {
   const { parsed, errors } = parseJsonFiles(textFiles);
-  const missingIds = [];
-
-  const watchlistMap = new Map();
-  for (const item of asArray(parsed.get("lists-watchlist.json"))) {
-    const mapped = mapLibraryItem(item, missingIds);
-    if (mapped) watchlistMap.set(libraryKey(mapped), mapped);
-  }
-
-  const watchedMap = new Map();
-  for (const entry of listFiles(parsed, /^watched-movies-\d+\.json$/i)) {
-    const mapped = mapWatchedMovie(entry, missingIds);
-    if (mapped) watchedMap.set(watchedKey(mapped), chooseNewer(watchedMap.get(watchedKey(mapped)), mapped, "watched_at"));
-  }
-  for (const entry of listFiles(parsed, /^watched-history-\d+\.json$/i)) {
-    const mapped = mapWatchedEpisode(entry, missingIds);
-    if (mapped) watchedMap.set(watchedKey(mapped), chooseNewer(watchedMap.get(watchedKey(mapped)), mapped, "watched_at"));
-  }
-
-  const playbackMap = new Map();
-  for (const entry of asArray(parsed.get("watched-playback.json"))) {
-    const mapped = mapPlaybackItem(entry, missingIds);
-    if (mapped) playbackMap.set(progressKey(mapped), chooseNewer(playbackMap.get(progressKey(mapped)), mapped, "last_watched"));
-  }
-
-  const watchedHistory = listFiles(parsed, /^watched-history-\d+\.json$/i);
-  const stats = parsed.get("user-stats.json") ?? null;
-  const sourceProfile = parsed.get("user-profile.json") ?? null;
-  const lowProgress = [...playbackMap.values()].filter((item) => item._progress_percent < 2);
-
+  const problems = [];
+  const library = libraryFromWatchlist(parsed, problems);
+  const watchedItems = watchedFromHistory(parsed, problems);
+  const progress = progressFromPlayback(parsed, problems);
   return {
-    version: IMPORTER_VERSION,
-    sourceFiles: [...parsed.keys()].sort(),
+    library,
+    watchedItems,
+    progress,
+    missingIds: problems,
     parseErrors: errors,
-    library: [...watchlistMap.values()].sort((a, b) => b.added_at - a.added_at),
-    watchedItems: [...watchedMap.values()].sort((a, b) => b.watched_at - a.watched_at),
-    progress: [...playbackMap.values()].sort((a, b) => b.last_watched - a.last_watched),
-    missingIds,
-    unsupported: countUnsupported(parsed),
     sourceSummary: {
-      jsonFiles: parsed.size,
-      historyPlays: watchedHistory.length,
-      watchlistEntries: asArray(parsed.get("lists-watchlist.json")).length,
-      playbackEntries: asArray(parsed.get("watched-playback.json")).length,
-      watchedMovieRows: listFiles(parsed, /^watched-movies-\d+\.json$/i).length,
-      watchedShowRows: asArray(parsed.get("watched-shows.json")).length,
-      lowProgressEntries: lowProgress.length,
-      stats,
-      sourceProfilePresent: sourceProfile != null,
+      filesParsed: parsed.size,
+      historyPlaysRead: historyRows(parsed).length,
+      ratingsRetainedInZip: countRatings(parsed),
+      listsRetainedInZip: countLists(parsed),
+    },
+    unsupported: {
+      ratings: countRatings(parsed),
+      lists: countLists(parsed),
     },
   };
 }
 
-export function parseRuntimeMinutes(value) {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
-  if (typeof value !== "string") return null;
-  const raw = value.trim().toLowerCase();
-  if (!raw) return null;
-  const hours = Number(raw.match(/(\d+(?:\.\d+)?)\s*h/)?.[1] ?? 0);
-  const minutesMatch = raw.match(/(\d+(?:\.\d+)?)\s*(?:min|m\b)/);
-  const minutes = Number(minutesMatch?.[1] ?? 0);
-  const total = hours * 60 + minutes;
-  if (total > 0) return total;
-  const numeric = Number(raw.replace(/[^0-9.]/g, ""));
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-}
-
-export function applyRuntime(progressItem, runtimeMinutes) {
-  const minutes = parseRuntimeMinutes(runtimeMinutes);
-  if (!minutes) return { ...progressItem, position: 0, duration: 0 };
-  const duration = Math.round(minutes * 60_000);
-  const position = Math.max(1, Math.min(duration - 1, Math.round(duration * progressItem._progress_percent / 100)));
-  return { ...progressItem, position, duration };
-}
-
-export function stripPrivateFields(value) {
-  if (Array.isArray(value)) return value.map(stripPrivateFields);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !key.startsWith("_"))
-    .map(([key, child]) => [key, stripPrivateFields(child)]));
-}
-
-export function mergeLibrary(remoteItems, importedItems) {
+export function mergeLibrary(existing, imported) {
   const merged = new Map();
-  for (const item of remoteItems) merged.set(libraryKey(item), item);
-  for (const imported of importedItems) {
-    const key = libraryKey(imported);
-    const remote = merged.get(key);
-    if (!remote) {
-      merged.set(key, stripPrivateFields(imported));
-      continue;
-    }
-    merged.set(key, {
-      ...stripPrivateFields(imported),
-      ...remote,
-      name: remote.name || imported.name,
-      poster: remote.poster || imported.poster,
-      background: remote.background || imported.background,
-      description: remote.description || imported.description,
-      release_info: remote.release_info || imported.release_info,
-      imdb_rating: remote.imdb_rating ?? imported.imdb_rating,
-      genres: Array.isArray(remote.genres) && remote.genres.length ? remote.genres : imported.genres,
-      added_at: Math.min(Number(remote.added_at || Infinity), Number(imported.added_at || Infinity)),
-    });
-  }
+  for (const item of existing) merged.set(`${item.content_type}|${item.content_id}`, stripPrivateFields(item));
+  for (const item of imported) merged.set(`${item.content_type}|${item.content_id}`, stripPrivateFields(item));
   return [...merged.values()];
 }
 
-export function mergeWatchedItems(remoteItems, importedItems) {
+function chooseNewer(existing, imported, timestampKey) {
+  if (!existing) return stripPrivateFields(imported);
+  const existingTime = Number(existing[timestampKey] ?? 0);
+  const importedTime = Number(imported[timestampKey] ?? 0);
+  return importedTime > existingTime ? stripPrivateFields(imported) : stripPrivateFields(existing);
+}
+
+export function mergeWatched(existing, imported) {
   const merged = new Map();
-  for (const item of remoteItems) merged.set(watchedKey(item), item);
-  for (const imported of importedItems) {
-    const key = watchedKey(imported);
+  for (const item of existing) {
+    const key = `${item.content_id}|${item.season ?? ""}|${item.episode ?? ""}`;
+    merged.set(key, stripPrivateFields(item));
+  }
+  for (const item of imported) {
+    const key = `${item.content_id}|${item.season ?? ""}|${item.episode ?? ""}`;
     merged.set(key, chooseNewer(merged.get(key), stripPrivateFields(imported), "watched_at"));
   }
   return [...merged.values()];
 }
 
-export function mergeProgress(remoteItems, importedItems) {
+export function mergeProgress(existing, imported) {
   const merged = new Map();
-  for (const item of remoteItems) merged.set(progressKey(item), item);
-  for (const imported of importedItems) {
-    const key = progressKey(imported);
+  for (const item of existing) {
+    const key = item.progress_key || (item.season != null && item.episode != null
+      ? `${item.content_id}_s${item.season}e${item.episode}`
+      : item.content_id);
+    merged.set(key, stripPrivateFields(item));
+  }
+  for (const item of imported) {
+    const key = imported.progress_key || (imported.season != null && imported.episode != null
+      ? `${imported.content_id}_s${imported.season}e${imported.episode}`
+      : imported.content_id);
     merged.set(key, chooseNewer(merged.get(key), stripPrivateFields(imported), "last_watched"));
   }
   return [...merged.values()];
