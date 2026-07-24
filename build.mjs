@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { patchAppSource } from "./src/patch-app-source.mjs";
+import { patchAppSource } from "./src/app-transform.mjs";
 
 const root = resolve(import.meta.dirname);
 const buildDir = resolve(root, ".build");
