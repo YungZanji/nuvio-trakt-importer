@@ -29,6 +29,8 @@ test("transform wires the four import modes, destructive verification, and repai
   assert.match(patched, /sync_delete_watch_progress/);
   assert.match(patched, /Fresh reset: clearing Nuvio Library/);
   assert.match(patched, /verifyStrategyResult/);
+  assert.match(patched, /Verifying Library mirror before any watched\/progress removals/);
+  assert.match(patched, /Watched and Continue Watching removals were not started/);
   assert.match(patched, /repairArtwork/);
   assert.match(patched, /Artwork repair complete and verified/);
   assert.equal(patched.includes("if (!state.plan) return;\n  const button = $(\"login-button\")"), false);
