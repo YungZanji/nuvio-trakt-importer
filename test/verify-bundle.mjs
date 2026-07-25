@@ -15,6 +15,8 @@ assert.match(style, /data:font\/woff2;base64,/);
 assert.equal(html.includes("fonts.googleapis.com"), false);
 assert.equal(html.includes("fonts.gstatic.com"), false);
 assert.ok(html.includes('id="tmdb-token"'), "per-user TMDB token field missing");
+assert.ok(html.includes('href="https://www.themoviedb.org/settings/api"'), "TMDB API settings link missing");
+assert.equal(html.includes("developer.themoviedb.org/docs/authentication-application"), false, "old TMDB setup documentation link should not remain");
 assert.equal(script.includes("__TMDB_READ_ACCESS_TOKEN__"), false, "build-time TMDB token placeholder must not exist");
 assert.equal(script.includes("images.metahub.space"), false, "MetaHub artwork must not be persisted by the built app");
 assert.equal(script.includes("localStorage"), false, "app must not store credentials in localStorage");

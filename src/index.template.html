@@ -76,7 +76,7 @@
         <div class="metadata-provider">
           <label for="tmdb-token">TMDB API Read Access Token <span>Recommended</span></label>
           <input id="tmdb-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your own TMDB API Read Access Token">
-          <p>The importer never saves this token. It is held only for this lookup, sent directly from your browser to TMDB, then cleared. <a href="https://developer.themoviedb.org/docs/authentication-application" target="_blank" rel="noopener noreferrer">How to get a TMDB read token</a>.</p>
+          <p>The importer never saves this token. It is held only for this lookup, sent directly from your browser to TMDB, then cleared. <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">Open your TMDB API settings</a>.</p>
         </div>
 
         <label id="metadata-consent-row" class="consent" hidden>
@@ -201,6 +201,7 @@
           </div>
           <label for="repair-tmdb-token">Your TMDB API Read Access Token</label>
           <input id="repair-tmdb-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your own TMDB read token">
+          <p><a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">Open your TMDB API settings</a>.</p>
           <button id="repair-artwork-button" type="button" class="secondary" disabled>Repair existing artwork</button>
           <p id="repair-state" class="substatus"></p>
         </div>
@@ -211,7 +212,7 @@
       <div class="step-number">5</div>
       <div class="step-content">
         <h2>Apply and verify</h2>
-        <p>The importer applies only the selected strategy, then reads Nuvio Sync back and verifies the resulting keys. Destructive strategies require an additional typed confirmation.</p>
+        <p>The importer applies only the selected strategy, then reads Nuvio Sync back and verifies the resulting data. Destructive strategies require an additional typed confirmation.</p>
         <button id="import-button" type="button" class="import-button" disabled>Apply selected import</button>
         <div id="success-panel" class="success-panel" hidden>
           <h3>Import verified</h3>

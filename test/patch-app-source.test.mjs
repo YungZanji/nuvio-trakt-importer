@@ -21,6 +21,17 @@ test("transform removes MetaHub persistence and uses a per-user in-memory TMDB t
   assert.match(patched, /state\.plan\.progress\.map\(\(item\) => applyRuntime\(item, parseMetaRuntime\(state\.metadataById\.get\(metadataKey\(item\)\)\)\)\)/);
 });
 
+test("transform verifies Continue Watching semantically instead of raw progress keys", () => {
+  const patched = patchAppSource(source);
+  assert.match(patched, /function progressIdentity/);
+  assert.match(patched, /function compareProgressSemantics/);
+  assert.match(patched, /newestByIdentity/);
+  assert.match(patched, /retryDelays = \[0, 350, 900\]/);
+  assert.match(patched, /value-mismatch=/);
+  assert.match(patched, /Missing progress examples/);
+  assert.doesNotMatch(patched, /\["progress", compareKeySets\(progressAfter, strategy\.progress\.target, progressKey\)\]/);
+});
+
 test("transform wires the four import modes, destructive verification, and repair-only flow", () => {
   const patched = patchAppSource(source);
   assert.match(patched, /buildImportStrategy/);
