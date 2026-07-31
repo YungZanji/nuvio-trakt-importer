@@ -271,17 +271,6 @@ npm run verify:bundle
 Then open the generated `index.html` or `Nuvio-Trakt-Importer.html` in a current browser.
 
 The generated page is self-contained, including the ZIP parser and bundled font. There is no application server to configure.
-
-## Development / deployment
-
-GitHub Pages is built from source through `.github/workflows/pages.yml`. The workflow:
-
-1. installs dependencies;
-2. builds the self-contained app;
-3. runs the automated test suite;
-4. performs the privacy/bundle verification;
-5. deploys `_site/index.html` when the change reaches `main`.
-
 ---
 
 # Version history
