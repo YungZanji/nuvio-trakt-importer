@@ -17,6 +17,25 @@ export function patchAppSource(source) {
 
   patched = replaceRequired(
     patched,
+    `async function pullProgress(profileId) {
+  const items = await rpc("sync_pull_watch_progress", { p_profile_id: profileId });
+  return Array.isArray(items) ? items : [];
+}
+`,
+    `async function pullProgress(profileId, expectedCount = 0) {
+  const requestedLimit = Math.max(10_000, Number(expectedCount || 0) + 500);
+  const items = await rpc("sync_pull_watch_progress", {
+    p_profile_id: profileId,
+    p_limit: requestedLimit,
+  });
+  return Array.isArray(items) ? items : [];
+}
+`,
+    "uncapped Continue Watching read",
+  );
+
+  patched = replaceRequired(
+    patched,
     `function compareKeySets(actual, expected, keyFn) {
   const actualKeys = new Set(actual.map(keyFn));
   const expectedKeys = new Set(expected.map(keyFn));
@@ -98,12 +117,35 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function progressRepairEntries(strategy, progressCheck) {
+  const repairKeys = new Set([...progressCheck.missing, ...progressCheck.valueMismatches]);
+  const targetByIdentity = newestByIdentity(strategy.progress.target);
+  return [...repairKeys].map((key) => targetByIdentity.get(key)).filter(Boolean);
+}
+
+async function repairProgressEntries(entries, profileId) {
+  const batches = chunk(sanitizeProgress(entries), 75);
+  for (let index = 0; index < batches.length; index++) {
+    setStatus("Safely retrying missing Continue Watching items: batch " + (index + 1) + "/" + batches.length + "…", "warning");
+    await rpc("sync_push_watch_progress", {
+      p_entries: batches[index],
+      p_profile_id: profileId,
+      p_origin_client_id: state.importerClientId,
+    });
+  }
+}
+
 async function verifyStrategyResult(strategy, profileId) {
   let lastResult = null;
-  const retryDelays = [0, 350, 900];
+  let progressRepairAttempted = false;
+  const retryDelays = [0, 700, 1800, 3500, 6000];
   for (let attempt = 0; attempt < retryDelays.length; attempt++) {
     if (retryDelays[attempt]) await sleep(retryDelays[attempt]);
-    const [libraryAfter, watchedAfter, progressAfter] = await Promise.all([pullLibrary(profileId), pullWatched(profileId), pullProgress(profileId)]);
+    const [libraryAfter, watchedAfter, progressAfter] = await Promise.all([
+      pullLibrary(profileId),
+      pullWatched(profileId),
+      pullProgress(profileId, strategy.progress.target.length),
+    ]);
     const libraryCheck = compareKeySets(libraryAfter, strategy.library.target, libraryKey);
     const watchedCheck = compareKeySets(watchedAfter, strategy.watched.target, watchedKey);
     const progressCheck = compareProgressSemantics(
@@ -117,6 +159,23 @@ async function verifyStrategyResult(strategy, profileId) {
       watchedCheck.missing.length || watchedCheck.extra.length ||
       progressCheck.missing.length || progressCheck.extra.length || progressCheck.valueMismatches.length;
     if (!failed) return { libraryAfter, watchedAfter, progressAfter };
+
+    const onlyRepairableProgressFailure =
+      !libraryCheck.missing.length && !libraryCheck.extra.length &&
+      !watchedCheck.missing.length && !watchedCheck.extra.length &&
+      !progressCheck.extra.length &&
+      (progressCheck.missing.length || progressCheck.valueMismatches.length);
+    if (!progressRepairAttempted && attempt >= 1 && onlyRepairableProgressFailure) {
+      const repairEntries = progressRepairEntries(strategy, progressCheck);
+      if (repairEntries.length) {
+        setStatus(
+          "Nuvio Sync did not return " + repairEntries.length + " Continue Watching item(s) after the first checks. Retrying only those items without clearing anything…",
+          "warning",
+        );
+        await repairProgressEntries(repairEntries, profileId);
+        progressRepairAttempted = true;
+      }
+    }
   }
 
   const { libraryCheck, watchedCheck, progressCheck } = lastResult;
@@ -128,10 +187,13 @@ async function verifyStrategyResult(strategy, profileId) {
   }
   const sample = progressCheck.missing.slice(0, 3);
   const sampleText = sample.length ? " Missing progress examples: " + sample.join(", ") + "." : "";
-  throw new Error("Verification did not match the selected strategy after retrying: " + details.join(", ") + "." + sampleText + " Your pre-change backup is still available.");
+  const repairText = progressRepairAttempted
+    ? " The importer safely retried only the missing Continue Watching items, but Nuvio Sync still did not return them."
+    : "";
+  throw new Error("Verification did not match the selected strategy after extended read-back checks: " + details.join(", ") + "." + sampleText + repairText + " Your pre-change backup is still available.");
 }
 `,
-    "semantic progress verification",
+    "semantic progress verification and recovery",
   );
 
   patched = replaceRequired(
