@@ -1,4 +1,4 @@
-name: Test and deploy GitHub Pages
+name: Deploy Nuvio Trakt Importer
 
 on:
   push:
@@ -66,13 +66,14 @@ jobs:
           path: _site
 
   deploy:
+    name: Deploy Nuvio Trakt Importer
     if: github.event_name != 'pull_request'
     environment:
-      name: github-pages
+      name: Nuvio Trakt Importer
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy Nuvio Trakt Importer
         id: deployment
         uses: actions/deploy-pages@v4
