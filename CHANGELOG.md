@@ -1,6 +1,29 @@
 # Changelog
 
-All notable user-facing changes to the Trakt → Nuvio Sync Importer are documented here.
+All notable user-facing changes to the Trakt ↔ Nuvio Sync Migration Tool are documented here.
+
+## Unreleased — 2026-09-07
+
+### Nuvio → Trakt reverse exporter
+
+- Added a separate **Nuvio → Trakt** tab alongside the existing **Trakt → Nuvio** workflow.
+- The reverse workflow uses an original Trakt export ZIP as the historical base and reads the selected Nuvio profile without writing anything back to Nuvio.
+- Every Nuvio Library item is mapped to the Trakt watchlist for movies and shows.
+- Newer Nuvio watched timestamps supersede older Trakt state while preserving existing historical plays.
+- Nuvio Continue Watching milliseconds are converted back to Trakt playback percentages.
+- Newer playback timestamps win; stale playback is removed when a later watched timestamp proves the item was finished.
+- Ratings, custom lists, social data, and other unrelated Trakt files are preserved rather than remapped.
+- Unchanged files are copied through without being rewritten.
+- Added cross-ID reconciliation for IMDb, TMDB, Trakt, and TVDB identifiers found in the original archive.
+- Hardened numbered watched-movie summary handling so an existing summary is updated in its original file rather than duplicated into the newest file.
+- Added a pre-download merge preview with watchlist, watched-state, playback, stale-progress, and final-count totals.
+- Added explicit disclosure that Nuvio exposes current watched state rather than a complete replay-event log, so multiple missing rewatches cannot be reconstructed exactly.
+- No Trakt API credentials are required to generate the merged archive; ZIP processing remains browser-local.
+
+### Validation
+
+- Added reverse-merge tests for watchlist mapping, newest-timestamp behavior, finished-state precedence, cross-ID matching, numbered summary files, and unchanged-file preservation.
+- Build, automated tests, and bundle/privacy verification are required to pass before deployment.
 
 ## v1.2.0 — 2026-07-24
 
