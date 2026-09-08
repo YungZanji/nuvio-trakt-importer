@@ -29,6 +29,7 @@ function idsFromContentId(contentId) {
   if (/^tt\d+$/i.test(raw)) return { imdb: raw };
   if (/^tmdb:\d+$/i.test(raw)) return { tmdb: Number(raw.slice(5)) };
   if (/^trakt:\d+$/i.test(raw)) return { trakt: Number(raw.slice(6)) };
+  if (/^tvdb:\d+$/i.test(raw)) return { tvdb: Number(raw.slice(5)) };
   return {};
 }
 
@@ -40,59 +41,56 @@ function mediaKeys(ids = {}) {
   if (tmdb) keys.push(`tmdb:${tmdb}`);
   const trakt = numericId(ids.trakt);
   if (trakt) keys.push(`trakt:${trakt}`);
+  const tvdb = numericId(ids.tvdb);
+  if (tvdb) keys.push(`tvdb:${tvdb}`);
   return keys;
 }
 
-function contentKey(contentId) {
+function rawContentKey(contentId) {
   const ids = idsFromContentId(contentId);
   return mediaKeys(ids)[0] || String(contentId || "").trim().toLowerCase();
 }
 
-function mediaKey(media) {
-  return mediaKeys(media?.ids)[0] || "";
-}
-
-function watchedIdentityFromNuvio(item) {
-  const base = contentKey(item?.content_id);
-  const season = item?.season == null ? null : Number(item.season);
-  const episode = item?.episode == null ? null : Number(item.episode);
-  if (Number.isInteger(season) && Number.isInteger(episode)) return `${base}|s${season}e${episode}`;
-  return `${base}|movie`;
-}
-
-function watchedIdentityFromHistory(entry) {
-  if (entry?.type === "episode" && entry.show && entry.episode) {
-    const base = mediaKey(entry.show);
-    const season = Number(entry.episode.season);
-    const episode = Number(entry.episode.number);
-    if (base && Number.isInteger(season) && Number.isInteger(episode)) return `${base}|s${season}e${episode}`;
-  }
-  if (entry?.movie) {
-    const base = mediaKey(entry.movie);
-    if (base) return `${base}|movie`;
-  }
-  return "";
-}
-
-function progressIdentityFromTrakt(entry) {
-  return watchedIdentityFromHistory(entry);
-}
-
-function yearFromItem(item) {
-  const raw = item?.release_info ?? item?.year ?? "";
-  const match = String(raw).match(/\b(19|20)\d{2}\b/);
-  return match ? Number(match[0]) : null;
-}
-
 function buildMediaIndex(parsedFiles) {
+  const aliases = new Map();
   const media = new Map();
   const episodes = new Map();
 
-  function indexMedia(value, type) {
-    if (!value || typeof value !== "object") return;
-    for (const key of mediaKeys(value.ids)) {
-      if (!media.has(key)) media.set(key, { type, media: clone(value) });
+  function canonicalForKeys(keys) {
+    for (const key of keys) {
+      const known = aliases.get(key);
+      if (known) return known;
     }
+    return keys[0] || "";
+  }
+
+  function mergeAliases(keys, canonical) {
+    const relatedCanonicals = new Set(keys.map((key) => aliases.get(key)).filter(Boolean));
+    if (canonical) relatedCanonicals.add(canonical);
+    const preferred = [...relatedCanonicals][0] || canonical;
+    if (!preferred) return "";
+
+    if (relatedCanonicals.size > 1) {
+      for (const [key, value] of aliases) {
+        if (relatedCanonicals.has(value)) aliases.set(key, preferred);
+      }
+      for (const oldCanonical of relatedCanonicals) {
+        if (oldCanonical === preferred) continue;
+        if (!media.has(preferred) && media.has(oldCanonical)) media.set(preferred, media.get(oldCanonical));
+        media.delete(oldCanonical);
+      }
+    }
+    for (const key of keys) aliases.set(key, preferred);
+    return preferred;
+  }
+
+  function indexMedia(value, type) {
+    if (!value || typeof value !== "object") return "";
+    const keys = mediaKeys(value.ids);
+    if (!keys.length) return "";
+    const canonical = mergeAliases(keys, canonicalForKeys(keys));
+    if (!media.has(canonical)) media.set(canonical, { type, media: clone(value) });
+    return canonical;
   }
 
   function visit(value) {
@@ -103,13 +101,12 @@ function buildMediaIndex(parsedFiles) {
     if (!value || typeof value !== "object") return;
     if (value.movie) indexMedia(value.movie, "movie");
     if (value.show) {
-      indexMedia(value.show, "show");
+      const showCanonical = indexMedia(value.show, "show");
       if (value.episode) {
-        const showKey = mediaKey(value.show);
         const season = Number(value.episode.season);
         const episode = Number(value.episode.number);
-        if (showKey && Number.isInteger(season) && Number.isInteger(episode)) {
-          const key = `${showKey}|s${season}e${episode}`;
+        if (showCanonical && Number.isInteger(season) && Number.isInteger(episode)) {
+          const key = `${showCanonical}|s${season}e${episode}`;
           if (!episodes.has(key)) episodes.set(key, clone(value.episode));
         }
       }
@@ -118,34 +115,52 @@ function buildMediaIndex(parsedFiles) {
   }
 
   for (const value of parsedFiles.values()) visit(value);
-  return { media, episodes };
+
+  return {
+    aliases,
+    media,
+    episodes,
+    canonicalContentId(contentId) {
+      const raw = rawContentKey(contentId);
+      return aliases.get(raw) || raw;
+    },
+    canonicalMedia(value) {
+      const keys = mediaKeys(value?.ids);
+      for (const key of keys) {
+        const canonical = aliases.get(key);
+        if (canonical) return canonical;
+      }
+      return keys[0] || "";
+    },
+  };
 }
 
-function libraryByContentId(library) {
+function libraryByContentId(library, mediaIndex) {
   const index = new Map();
   for (const item of asArray(library)) {
-    const key = contentKey(item?.content_id);
+    const key = mediaIndex.canonicalContentId(item?.content_id);
     if (key) index.set(key, item);
   }
   return index;
 }
 
 function resolveMedia(item, type, mediaIndex, libraryIndex) {
-  const key = contentKey(item?.content_id);
+  const key = mediaIndex.canonicalContentId(item?.content_id);
   const indexed = mediaIndex.media.get(key);
   if (indexed?.media) return clone(indexed.media);
 
   const libraryItem = libraryIndex.get(key);
   const title = libraryItem?.name || item?.title || item?.name || String(item?.content_id || "Unknown title");
-  const year = yearFromItem(libraryItem || item);
+  const raw = libraryItem?.release_info ?? libraryItem?.year ?? item?.release_info ?? item?.year ?? "";
+  const yearMatch = String(raw).match(/\b(19|20)\d{2}\b/);
   const ids = idsFromContentId(item?.content_id || libraryItem?.content_id);
   const media = { title, ids };
-  if (year) media.year = year;
+  if (yearMatch) media.year = Number(yearMatch[0]);
   return media;
 }
 
 function resolveEpisode(item, show, mediaIndex) {
-  const showKey = mediaKey(show) || contentKey(item?.content_id);
+  const showKey = mediaIndex.canonicalMedia(show) || mediaIndex.canonicalContentId(item?.content_id);
   const season = Number(item?.season);
   const episode = Number(item?.episode);
   const indexed = mediaIndex.episodes.get(`${showKey}|s${season}e${episode}`);
@@ -162,7 +177,8 @@ function findPathByBasename(textFiles, wanted) {
 }
 
 function numberedPaths(textFiles, prefix) {
-  const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-(\\d+)\\.json$`, "i");
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escaped}-(\\d+)\\.json$`, "i");
   return [...textFiles.keys()]
     .map((path) => ({ path, match: basename(path)?.match(pattern) }))
     .filter((entry) => entry.match)
@@ -172,8 +188,7 @@ function numberedPaths(textFiles, prefix) {
 function parseRelevantJson(textFiles, path, fallback = []) {
   if (!path || !textFiles.has(path)) return clone(fallback);
   try {
-    const value = JSON.parse(textFiles.get(path));
-    return value;
+    return JSON.parse(textFiles.get(path));
   } catch (error) {
     throw new Error(`Cannot safely merge ${basename(path)} because it is not valid JSON: ${error.message || error}`);
   }
@@ -186,7 +201,7 @@ function parseAllJson(textFiles) {
     try {
       parsed.set(path, JSON.parse(text));
     } catch {
-      // Unrelated malformed files are preserved byte-for-byte by the caller.
+      // Unrelated malformed files are preserved byte-for-byte by the ZIP writer.
     }
   }
   return parsed;
@@ -197,25 +212,48 @@ function ensureArray(value, filename) {
   return value;
 }
 
-function maxHistoryTimestamp(history, movieSummaries) {
+function watchedIdentityFromNuvio(item, mediaIndex) {
+  const base = mediaIndex.canonicalContentId(item?.content_id);
+  const season = item?.season == null ? null : Number(item.season);
+  const episode = item?.episode == null ? null : Number(item.episode);
+  if (Number.isInteger(season) && Number.isInteger(episode)) return `${base}|s${season}e${episode}`;
+  return `${base}|movie`;
+}
+
+function watchedIdentityFromHistory(entry, mediaIndex) {
+  if (entry?.type === "episode" && entry.show && entry.episode) {
+    const base = mediaIndex.canonicalMedia(entry.show);
+    const season = Number(entry.episode.season);
+    const episode = Number(entry.episode.number);
+    if (base && Number.isInteger(season) && Number.isInteger(episode)) return `${base}|s${season}e${episode}`;
+  }
+  if (entry?.movie) {
+    const base = mediaIndex.canonicalMedia(entry.movie);
+    if (base) return `${base}|movie`;
+  }
+  return "";
+}
+
+function maxHistoryTimestamp(history, movieSummaries, mediaIndex) {
   const latest = new Map();
   for (const entry of history) {
-    const key = watchedIdentityFromHistory(entry);
+    const key = watchedIdentityFromHistory(entry, mediaIndex);
     if (!key) continue;
     latest.set(key, Math.max(latest.get(key) || 0, parseTimestamp(entry.watched_at)));
   }
   for (const entry of movieSummaries) {
-    const key = entry?.movie ? `${mediaKey(entry.movie)}|movie` : "";
-    if (!key || key.startsWith("|")) continue;
+    const base = mediaIndex.canonicalMedia(entry?.movie);
+    const key = base ? `${base}|movie` : "";
+    if (!key) continue;
     latest.set(key, Math.max(latest.get(key) || 0, parseTimestamp(entry.last_watched_at || entry.last_updated_at)));
   }
   return latest;
 }
 
-function latestPlaybackMap(playback) {
+function latestPlaybackMap(playback, mediaIndex) {
   const map = new Map();
   for (const entry of playback) {
-    const key = progressIdentityFromTrakt(entry);
+    const key = watchedIdentityFromHistory(entry, mediaIndex);
     if (!key) continue;
     const current = map.get(key);
     if (!current || parseTimestamp(entry.paused_at) >= parseTimestamp(current.paused_at)) map.set(key, entry);
@@ -231,16 +269,22 @@ function makeWatchlistEntry(item, mediaIndex, libraryIndex) {
     : { type: "show", show: media, listed_at: toIso(item?.added_at) };
 }
 
-function watchlistIdentity(entry) {
-  if (entry?.type === "movie" && entry.movie) return `${mediaKey(entry.movie)}|movie`;
-  if ((entry?.type === "show" || entry?.type === "series") && entry.show) return `${mediaKey(entry.show)}|show`;
+function watchlistIdentity(entry, mediaIndex) {
+  if (entry?.type === "movie" && entry.movie) {
+    const key = mediaIndex.canonicalMedia(entry.movie);
+    return key ? `${key}|movie` : "";
+  }
+  if ((entry?.type === "show" || entry?.type === "series") && entry.show) {
+    const key = mediaIndex.canonicalMedia(entry.show);
+    return key ? `${key}|show` : "";
+  }
   return "";
 }
 
-function libraryIdentity(item) {
-  const key = contentKey(item?.content_id);
+function libraryIdentity(item, mediaIndex) {
+  const key = mediaIndex.canonicalContentId(item?.content_id);
   const type = String(item?.content_type || "").toLowerCase() === "movie" ? "movie" : "show";
-  return `${key}|${type}`;
+  return key ? `${key}|${type}` : "";
 }
 
 function makeHistoryEntry(item, mediaIndex, libraryIndex) {
@@ -288,23 +332,25 @@ function makePlaybackEntry(item, mediaIndex, libraryIndex) {
   };
 }
 
-function updateMovieSummary(summary, historyEntry, watchedAt) {
-  const key = mediaKey(historyEntry.movie);
-  const existing = summary.find((entry) => mediaKey(entry?.movie) === key);
+function updateMovieSummary(summary, historyEntry, watchedAt, mediaIndex) {
+  const key = mediaIndex.canonicalMedia(historyEntry.movie);
+  const existing = summary.find((entry) => mediaIndex.canonicalMedia(entry?.movie) === key);
   const watchedIso = toIso(watchedAt);
   if (existing) {
     existing.last_watched_at = watchedIso;
     if ("last_updated_at" in existing) existing.last_updated_at = watchedIso;
     if (Number.isFinite(Number(existing.plays))) existing.plays = Number(existing.plays) + 1;
-    return;
+    return existing;
   }
-  summary.push({ plays: 1, last_watched_at: watchedIso, last_updated_at: watchedIso, movie: clone(historyEntry.movie) });
+  const created = { plays: 1, last_watched_at: watchedIso, last_updated_at: watchedIso, movie: clone(historyEntry.movie) };
+  summary.push(created);
+  return created;
 }
 
-function updateShowSummary(summary, historyEntry, watchedAt) {
+function updateShowSummary(summary, historyEntry, watchedAt, mediaIndex) {
   const show = historyEntry.show;
-  const showKey = mediaKey(show);
-  let row = summary.find((entry) => mediaKey(entry?.show) === showKey);
+  const showKey = mediaIndex.canonicalMedia(show);
+  let row = summary.find((entry) => mediaIndex.canonicalMedia(entry?.show) === showKey);
   const watchedIso = toIso(watchedAt);
   if (!row) {
     row = { plays: 0, last_watched_at: watchedIso, last_updated_at: watchedIso, show: clone(show), seasons: [] };
@@ -331,6 +377,14 @@ function updateShowSummary(summary, historyEntry, watchedAt) {
   episode.last_watched_at = watchedIso;
 }
 
+function findMovieSummaryLocation(movieArrays, movie, mediaIndex) {
+  const key = mediaIndex.canonicalMedia(movie);
+  for (let index = 0; index < movieArrays.length; index++) {
+    if (movieArrays[index].some((entry) => mediaIndex.canonicalMedia(entry?.movie) === key)) return index;
+  }
+  return -1;
+}
+
 export function buildMergedTraktExport(textFiles, nuvioData = {}) {
   if (!(textFiles instanceof Map) || textFiles.size === 0) throw new Error("Choose the original Trakt export ZIP first.");
   const library = asArray(nuvioData.library);
@@ -339,25 +393,26 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
 
   const parsedFiles = parseAllJson(textFiles);
   const mediaIndex = buildMediaIndex(parsedFiles);
-  const libraryIndex = libraryByContentId(library);
+  const libraryIndex = libraryByContentId(library, mediaIndex);
   const updates = new Map();
   const warnings = [];
 
   const watchlistPath = findPathByBasename(textFiles, "lists-watchlist.json") || "lists-watchlist.json";
   const watchlist = ensureArray(parseRelevantJson(textFiles, watchlistPath, []), "lists-watchlist.json");
-  const watchlistKeys = new Set(watchlist.map(watchlistIdentity).filter(Boolean));
+  const watchlistKeys = new Set(watchlist.map((entry) => watchlistIdentity(entry, mediaIndex)).filter(Boolean));
+  const originalWatchlist = watchlist.length;
   let watchlistAdded = 0;
   let unresolvedLibrary = 0;
   for (const item of library) {
-    const key = libraryIdentity(item);
-    if (!key || key.startsWith("|")) {
+    const key = libraryIdentity(item, mediaIndex);
+    if (!key) {
       unresolvedLibrary++;
       continue;
     }
     if (watchlistKeys.has(key)) continue;
     const entry = makeWatchlistEntry(item, mediaIndex, libraryIndex);
-    const entryKey = watchlistIdentity(entry);
-    if (!entryKey || entryKey.startsWith("|")) {
+    const entryKey = watchlistIdentity(entry, mediaIndex) || key;
+    if (!entryKey) {
       unresolvedLibrary++;
       continue;
     }
@@ -365,11 +420,12 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
     watchlistKeys.add(entryKey);
     watchlistAdded++;
   }
-  updates.set(watchlistPath, JSON.stringify(watchlist, null, 2));
+  if (watchlistAdded) updates.set(watchlistPath, JSON.stringify(watchlist, null, 2));
 
   const historyPaths = numberedPaths(textFiles, "watched-history");
   const historyArrays = historyPaths.map(({ path }) => ensureArray(parseRelevantJson(textFiles, path, []), basename(path)));
   const history = historyArrays.flat();
+  const originalHistoryPlays = history.length;
   const targetHistoryPath = historyPaths.at(-1)?.path || "watched-history-1.json";
   const targetHistory = historyPaths.length ? historyArrays.at(-1) : [];
 
@@ -378,47 +434,65 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
   const movieSummaries = movieArrays.flat();
   const targetMoviePath = moviePaths.at(-1)?.path || "watched-movies-1.json";
   const targetMovieSummary = moviePaths.length ? movieArrays.at(-1) : [];
+  const changedMovieSummaryIndexes = new Set();
+  let createdMovieSummary = false;
 
   const showsPath = findPathByBasename(textFiles, "watched-shows.json") || "watched-shows.json";
   const showSummary = ensureArray(parseRelevantJson(textFiles, showsPath, []), "watched-shows.json");
+  let showSummaryChanged = false;
 
-  const latestWatched = maxHistoryTimestamp(history, movieSummaries);
+  const latestWatched = maxHistoryTimestamp(history, movieSummaries, mediaIndex);
   let watchedAdded = 0;
   let movieWatchedAdded = 0;
   let episodeWatchedAdded = 0;
+
   for (const item of watchedItems) {
-    const identity = watchedIdentityFromNuvio(item);
+    const identity = watchedIdentityFromNuvio(item, mediaIndex);
     const watchedAt = parseTimestamp(item?.watched_at);
-    if (!identity || identity.startsWith("|")) continue;
-    if (!(watchedAt > (latestWatched.get(identity) || 0))) continue;
+    if (!identity || !(watchedAt > (latestWatched.get(identity) || 0))) continue;
+
     const entry = makeHistoryEntry(item, mediaIndex, libraryIndex);
     targetHistory.push(entry);
     history.push(entry);
     latestWatched.set(identity, watchedAt);
     watchedAdded++;
+
     if (entry.type === "movie") {
-      updateMovieSummary(targetMovieSummary, entry, watchedAt);
+      const existingIndex = findMovieSummaryLocation(movieArrays, entry.movie, mediaIndex);
+      if (existingIndex >= 0) {
+        updateMovieSummary(movieArrays[existingIndex], entry, watchedAt, mediaIndex);
+        changedMovieSummaryIndexes.add(existingIndex);
+      } else {
+        updateMovieSummary(targetMovieSummary, entry, watchedAt, mediaIndex);
+        if (moviePaths.length) changedMovieSummaryIndexes.add(movieArrays.length - 1);
+        else createdMovieSummary = true;
+      }
       movieWatchedAdded++;
     } else {
-      updateShowSummary(showSummary, entry, watchedAt);
+      updateShowSummary(showSummary, entry, watchedAt, mediaIndex);
+      showSummaryChanged = true;
       episodeWatchedAdded++;
     }
   }
-  updates.set(targetHistoryPath, JSON.stringify(targetHistory, null, 2));
-  updates.set(targetMoviePath, JSON.stringify(targetMovieSummary, null, 2));
-  updates.set(showsPath, JSON.stringify(showSummary, null, 2));
+
+  if (watchedAdded) updates.set(targetHistoryPath, JSON.stringify(targetHistory, null, 2));
+  for (const index of changedMovieSummaryIndexes) {
+    updates.set(moviePaths[index].path, JSON.stringify(movieArrays[index], null, 2));
+  }
+  if (createdMovieSummary) updates.set(targetMoviePath, JSON.stringify(targetMovieSummary, null, 2));
+  if (showSummaryChanged) updates.set(showsPath, JSON.stringify(showSummary, null, 2));
 
   const playbackPath = findPathByBasename(textFiles, "watched-playback.json") || "watched-playback.json";
   const playback = ensureArray(parseRelevantJson(textFiles, playbackPath, []), "watched-playback.json");
-  const playbackByKey = latestPlaybackMap(playback);
+  const playbackByKey = latestPlaybackMap(playback, mediaIndex);
   let playbackAdded = 0;
   let playbackUpdated = 0;
   let playbackRemovedBecauseFinished = 0;
   let playbackSkipped = 0;
 
   for (const item of watchProgress) {
-    const key = watchedIdentityFromNuvio(item);
-    if (!key || key.startsWith("|")) continue;
+    const key = watchedIdentityFromNuvio(item, mediaIndex);
+    if (!key) continue;
     const candidate = makePlaybackEntry(item, mediaIndex, libraryIndex);
     if (!candidate) {
       playbackSkipped++;
@@ -444,19 +518,25 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
       playbackRemovedBecauseFinished++;
     }
   }
-  updates.set(playbackPath, JSON.stringify([...playbackByKey.values()].sort((a, b) => parseTimestamp(b.paused_at) - parseTimestamp(a.paused_at)), null, 2));
+
+  if (playbackAdded || playbackUpdated || playbackRemovedBecauseFinished) {
+    const mergedPlayback = [...playbackByKey.values()].sort((a, b) => parseTimestamp(b.paused_at) - parseTimestamp(a.paused_at));
+    updates.set(playbackPath, JSON.stringify(mergedPlayback, null, 2));
+  }
 
   if (unresolvedLibrary) warnings.push(`${unresolvedLibrary} Nuvio Library item(s) had no usable content ID and could not be added to the Trakt watchlist.`);
   if (playbackSkipped) warnings.push(`${playbackSkipped} Nuvio progress item(s) had no valid duration/position and were left unchanged.`);
 
+  const preservedFiles = [...textFiles.keys()].filter((path) => !updates.has(path)).length;
+
   return {
     updates,
     summary: {
-      originalWatchlist: watchlist.length - watchlistAdded,
+      originalWatchlist,
       nuvioLibrary: library.length,
       watchlistAdded,
       finalWatchlist: watchlist.length,
-      originalHistoryPlays: history.length - watchedAdded,
+      originalHistoryPlays,
       watchedAdded,
       movieWatchedAdded,
       episodeWatchedAdded,
@@ -465,7 +545,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
       playbackUpdated,
       playbackRemovedBecauseFinished,
       finalPlayback: playbackByKey.size,
-      preservedFiles: textFiles.size - updates.size,
+      preservedFiles,
     },
     warnings,
   };
