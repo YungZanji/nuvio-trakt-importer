@@ -88,6 +88,8 @@ export function patchExportTemplate(source) {
             </ul>
           </div>
 
+          <p class="inline-warning">Nuvio Sync exposes the current watched state and latest timestamp, not a complete replay-event log. If the same movie or episode was rewatched multiple times after your Trakt export, the exporter can preserve the newest known state but cannot reconstruct every missing replay event.</p>
+
           <div id="export-preview" hidden>
             <div class="stat-grid">
               <div><strong id="export-count-watchlist">0</strong><span>Watchlist additions</span></div>
