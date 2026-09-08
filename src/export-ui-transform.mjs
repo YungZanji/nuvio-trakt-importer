@@ -65,9 +65,9 @@ function renderExportSourceSummary() {
   }
   try {
     const plan = buildImportPlan(new Map([...exportArchiveTextFiles].map(([path, text]) => [path.split("/").pop(), text])));
-    box.textContent = `Original Trakt archive: ${formatNumber(plan.sourceSummary.historyPlays)} history plays, ${formatNumber(plan.sourceSummary.watchlistEntries)} watchlist items, and ${formatNumber(plan.sourceSummary.playbackEntries)} playback positions. All unrelated Trakt files are preserved.`;
+    box.textContent = "Original Trakt archive: " + formatNumber(plan.sourceSummary.historyPlays) + " history plays, " + formatNumber(plan.sourceSummary.watchlistEntries) + " watchlist items, and " + formatNumber(plan.sourceSummary.playbackEntries) + " playback positions. All unrelated Trakt files are preserved.";
   } catch {
-    box.textContent = `Original Trakt archive loaded with ${formatNumber(exportArchiveTextFiles.size)} JSON files. Unrelated files will be preserved.`;
+    box.textContent = "Original Trakt archive loaded with " + formatNumber(exportArchiveTextFiles.size) + " JSON files. Unrelated files will be preserved.";
   }
   box.hidden = false;
 }
@@ -93,7 +93,7 @@ async function onExportZipSelected(event) {
     exportArchiveTextFiles = null;
     exportMergeResult = null;
     updateExportReadiness();
-    setStatus(`Could not read this Trakt ZIP: ${error.message || error}`, "error");
+    setStatus("Could not read this Trakt ZIP: " + (error.message || error), "error");
   }
 }
 
@@ -123,7 +123,7 @@ function renderExportPreview() {
     exportMergeResult = null;
     panel.hidden = false;
     $("export-warnings").hidden = false;
-    $("export-warnings").textContent = `The merge preview could not be built safely: ${error.message || error}`;
+    $("export-warnings").textContent = "The merge preview could not be built safely: " + (error.message || error);
   }
 }
 
@@ -155,11 +155,11 @@ function downloadMergedTraktArchive() {
     for (const [path, text] of result.updates) mergedFiles[path] = strToU8(text);
     const zip = zipSync(mergedFiles, { level: 6 });
     const date = new Date().toISOString().slice(0, 10);
-    downloadBytes(`Trakt-Nuvio-Merged-${date}.zip`, zip);
+    downloadBytes("Trakt-Nuvio-Merged-" + date + ".zip", zip);
     exportMergeResult = result;
-    setStatus(`Merged Trakt archive downloaded. Added ${formatNumber(result.summary.watchedAdded)} newer watched states and ${formatNumber(result.summary.watchlistAdded)} Nuvio Library item(s) to the Trakt watchlist.`, "success");
+    setStatus("Merged Trakt archive downloaded. Added " + formatNumber(result.summary.watchedAdded) + " newer watched states and " + formatNumber(result.summary.watchlistAdded) + " Nuvio Library item(s) to the Trakt watchlist.", "success");
   } catch (error) {
-    setStatus(`Export stopped: ${error.message || error}`, "error");
+    setStatus("Export stopped: " + (error.message || error), "error");
   } finally {
     setBusy(button, false);
     updateExportReadiness();
