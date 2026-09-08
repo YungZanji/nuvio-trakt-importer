@@ -38,11 +38,13 @@ export function patchExportTemplate(source) {
     html,
     '    <footer>\n',
     `    <div id="exporter-workflow" hidden>
+      <p class="reverse-workflow-note"><strong>Reverse workflow:</strong> only the four steps below belong to Nuvio → Trakt. The original Trakt ZIP is used only as the historical base that Nuvio's newer state is merged into.</p>
+
       <section>
         <div class="step-number">1</div>
         <div class="step-content">
-          <h2>Choose your original Trakt export</h2>
-          <p>This archive is the historical base. The exporter keeps ratings, custom lists, social records, and other Trakt-specific files untouched, then updates only watch-history-related data from Nuvio.</p>
+          <h2>Choose the original Trakt archive to update</h2>
+          <p>This is not the Trakt → Nuvio import step. The reverse exporter needs your original Trakt ZIP only as a historical baseline. Ratings, custom lists, social records, and other unrelated Trakt files are carried through untouched.</p>
           <label class="file-picker">
             <input id="export-zip-input" type="file" accept=".zip,application/zip">
             <span>Choose original Trakt ZIP</span>
@@ -55,7 +57,7 @@ export function patchExportTemplate(source) {
         <div class="step-number">2</div>
         <div class="step-content">
           <h2>Sign in to Nuvio Sync</h2>
-          <p>The exporter reads your current Nuvio tracking data using the same private TV sign-in flow as the importer. It does not write anything back to Nuvio.</p>
+          <p>This button starts Nuvio's TV sign-in directly from the reverse workflow. No Trakt import plan, TMDB lookup, or other Trakt → Nuvio setup is required first.</p>
           <button id="export-login-button" type="button">Start Nuvio sign-in</button>
           <div id="export-login-slot"></div>
         </div>
@@ -74,7 +76,7 @@ export function patchExportTemplate(source) {
       <section>
         <div class="step-number">4</div>
         <div class="step-content">
-          <h2>Review and export</h2>
+          <h2>Review exact changes and export</h2>
           <p>Nuvio is allowed to supersede older Trakt state only when its timestamp is newer. Existing Trakt history is retained instead of being flattened or deleted.</p>
 
           <div class="export-rule-box">
@@ -102,6 +104,26 @@ export function patchExportTemplate(source) {
               <div><strong id="export-final-watchlist">0</strong><span>Watchlist items in merged archive</span></div>
               <div><strong id="export-final-progress">0</strong><span>Playback positions in merged archive</span></div>
             </div>
+
+            <details id="export-change-details" class="export-change-details" open>
+              <summary>Show the exact Nuvio → Trakt changes</summary>
+              <p class="export-change-intro">These lists are generated from the actual before/after archive diff, so you can verify the titles, episodes, timestamps, and progress before downloading anything.</p>
+              <div class="export-change-groups">
+                <div class="export-change-group">
+                  <h3>Watchlist additions <span id="export-detail-watchlist-count">0</span></h3>
+                  <ul id="export-detail-watchlist" class="export-change-list"></ul>
+                </div>
+                <div class="export-change-group">
+                  <h3>New watched-history entries <span id="export-detail-history-count">0</span></h3>
+                  <ul id="export-detail-history" class="export-change-list"></ul>
+                </div>
+                <div class="export-change-group">
+                  <h3>Continue Watching changes <span id="export-detail-playback-count">0</span></h3>
+                  <ul id="export-detail-playback" class="export-change-list"></ul>
+                </div>
+              </div>
+            </details>
+
             <p id="export-warnings" class="inline-warning" hidden></p>
           </div>
 
