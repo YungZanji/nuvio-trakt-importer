@@ -1,18 +1,18 @@
-# Trakt → Nuvio Sync Importer
+# Trakt ↔ Nuvio Sync Migration Tool
 
 <p align="center">
-  <strong>A private, browser-only migration and repair tool for moving Trakt tracking data into Nuvio Sync.</strong>
+  <strong>A private, browser-only migration, merge, and repair tool for Trakt exports and Nuvio Sync.</strong>
 </p>
 
 <p align="center">
-  <img alt="Version 1.2.0" src="https://img.shields.io/badge/version-1.2.0-755dff?style=for-the-badge">
+  <img alt="Bidirectional" src="https://img.shields.io/badge/migration-bidirectional-755dff?style=for-the-badge">
   <img alt="Browser only" src="https://img.shields.io/badge/processing-browser%20only-23865f?style=for-the-badge">
   <img alt="No server" src="https://img.shields.io/badge/server-none-2b303b?style=for-the-badge">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-4b5563?style=for-the-badge">
 </p>
 
 <p align="center">
-  <a href="https://yungzanji.github.io/nuvio-trakt-importer/"><strong>Open the importer</strong></a>
+  <a href="https://yungzanji.github.io/nuvio-trakt-importer/"><strong>Open the migration tool</strong></a>
   ·
   <a href="CHANGELOG.md">Changelog</a>
   ·
@@ -21,245 +21,203 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-> **Version 1.2.0:** the importer now supports four selectable merge strategies, a verified fresh-start workflow, and a standalone TMDB artwork repair tool for existing Nuvio libraries.
+---
+
+## What it does
+
+The site now has two separate workflows:
+
+| Direction | Purpose |
+| --- | --- |
+| **Trakt → Nuvio** | Import a Trakt export ZIP into Nuvio Sync with safe merge, mirror, or reset strategies. |
+| **Nuvio → Trakt** | Merge newer Nuvio Library, watched-state, and Continue Watching data back into an original Trakt export ZIP. |
+
+Both workflows run in the browser. The project has no application server, database, analytics, cookies, or persistent browser storage.
+
+The original Trakt ZIP is never uploaded by this tool.
 
 ---
 
-## What problem does this solve?
+# Trakt → Nuvio
 
-Nuvio can connect to Trakt directly, but a normal account sync may not always reproduce a large Trakt history exactly. This project gives you another route: download your own Trakt export ZIP, process it locally in your browser, preview how it will interact with your existing Nuvio Sync data, and then write the selected result through Nuvio's Sync functions.
+This is the original importer workflow. It is useful when Nuvio's normal Trakt connection does not reproduce a large history completely, or when you want a controlled migration using the files in your own Trakt export.
 
-It is especially useful when:
-
-- a normal Trakt-to-Nuvio sync only imports part of a large history;
-- you want to migrate from Trakt without leaving the Trakt account connected;
-- you already use Nuvio and need to merge imported data without destroying newer Nuvio activity;
-- you want Nuvio to mirror the Trakt export more closely;
-- you want to wipe only the supported Nuvio tracking categories and rebuild them cleanly;
-- posters or backgrounds in an existing Nuvio Library are missing or broken and you want to refresh them through TMDB without re-importing Trakt.
-
-## What it can move
+## Supported mappings
 
 | Trakt data | Nuvio destination | Notes |
 | --- | --- | --- |
 | Watchlist | Library | Includes metadata/artwork enrichment when available |
-| Watched movies | Watched status | Latest relevant timestamp is retained |
+| Watched movies | Watched status | Relevant timestamps are retained |
 | Watched episodes | Watched status | Stored by show + season + episode |
 | Playback / progress | Continue Watching | Trakt percentage is converted to milliseconds using runtime metadata |
 
-Trakt ratings, social activity, and independent personal-list membership do not currently map cleanly to Nuvio Sync's supported schema. They remain preserved in the original Trakt ZIP instead of being forced into the wrong category.
+Ratings, social activity, and independent personal-list membership are not forced into unrelated Nuvio fields. They remain in the original Trakt ZIP.
+
+## Import strategies
+
+After reading the selected Nuvio profile, the importer previews the changes before writing anything.
+
+| Strategy | Behavior |
+| --- | --- |
+| **Only bring new items** | Adds missing Trakt records without overwriting matching Nuvio records. |
+| **Merge & refresh** | Adds missing records and keeps the newer watched/progress timestamp. Recommended for most migrations. |
+| **Mirror the Trakt import** | Makes the supported Nuvio tracking categories reflect the Trakt import more closely. |
+| **Reset tracking data & import fresh** | Clears Library, watched status, and Continue Watching, verifies the clear, then rebuilds them from Trakt. |
+
+Destructive modes require explicit typed confirmation and read-back verification.
+
+## Artwork repair
+
+The site can also repair poster/background URLs in an existing Nuvio Library without performing a Trakt import.
+
+The user supplies their own TMDB API Read Access Token. The token is kept only in page memory during the lookup and is cleared afterward.
 
 ---
 
-# Choose the right import strategy
+# Nuvio → Trakt
 
-Version 1.2.0 reads your existing Nuvio data first and lets you choose how the imported Trakt set should interact with it.
+The reverse exporter is designed for the case where Trakt was your old tracker, you later used Nuvio as your source of truth, and you now want an updated Trakt-style archive containing the newer Nuvio tracking state.
 
-| Strategy | Best for | Existing Nuvio items | Missing-from-Trakt items |
-| --- | --- | --- | --- |
-| **Only bring new items** | Safest possible import | Left exactly as-is | Kept |
-| **Merge & refresh** | Most users | Useful metadata refreshes; newer watched/progress timestamps win | Kept |
-| **Mirror the Trakt import** | Making Nuvio closely match the export | Matching records are updated | Removed from the supported tracking categories |
-| **Reset tracking data & import fresh** | Starting the supported tracking categories over | Library, watched status and Continue Watching are cleared and verified first | Rebuilt from Trakt |
+It requires:
 
-### Recommended: Merge & refresh
+1. Your original Trakt export ZIP.
+2. A Nuvio Sync sign-in.
+3. The Nuvio profile you want to merge.
 
-This is the default choice for most people. It adds missing Trakt records while protecting newer activity that may already exist in Nuvio. Existing Library metadata can be refreshed when the imported/metadata-resolved version provides something useful, while watched and Continue Watching timestamps use the newer value.
+No Trakt API key, Trakt OAuth login, or Trakt application credentials are required to generate the merged archive.
 
-### Safe: Only bring new items
+## Reverse merge rules
 
-Use this when you treat Nuvio as the primary source of truth and only want to fill gaps from Trakt. Existing matching records are not overwritten and nothing is deleted.
+The original Trakt export remains the historical base.
 
-### Advanced: Mirror the Trakt import
+### Nuvio Library → Trakt Watchlist
 
-Use this when the Trakt export should be the source of truth for the three supported tracking categories.
+Every Nuvio Library item that is not already represented in the Trakt watchlist is added to the Trakt watchlist.
 
-Before any watched-status or Continue Watching removals are allowed to begin, the importer writes the requested Library state and reads it back. If Nuvio does not produce the requested Library mirror, the destructive portion stops.
+This applies to both movies and TV shows. Nuvio Library items are deliberately treated as **watchlist items**, not Collection items or custom-list entries.
 
-### Danger: Reset tracking data & import fresh
+The existing Trakt watchlist is retained, so the result is a union rather than a destructive mirror.
 
-This clears only the tracking categories managed by this importer:
+### Watched state
 
-- Nuvio Library
-- watched status
-- Continue Watching
+For each movie or episode, the tool compares the latest known Trakt watched timestamp with the Nuvio watched timestamp.
 
-It does **not intentionally target** your Nuvio profile, add-ons, plugins, account, or unrelated profile settings.
+- If Trakt is newer or equal, the Trakt state is retained.
+- If Nuvio is newer, a new watched event is added to the Trakt history and the appropriate watched summary is updated.
+- Older Trakt history events remain in the archive.
 
-The workflow is deliberately staged:
+This means a title started or tracked earlier in Trakt but finished later in Nuvio will end with the newer Nuvio watched state represented in the merged archive.
 
-1. Download the mandatory pre-change backup.
-2. Clear the Library and verify it is actually empty.
-3. Clear watched status and Continue Watching and verify those are empty.
-4. Rebuild the three supported categories from the Trakt export.
-5. Read everything back and verify the final result.
+### Continue Watching / playback
 
-The importer stops when an expected destructive step cannot be verified instead of blindly continuing.
+Nuvio stores playback position and duration in milliseconds. The exporter converts those values back into a Trakt playback percentage.
 
----
+For the same movie or episode:
 
-# Artwork repair without a Trakt import
+- the newest pause timestamp wins;
+- an older Nuvio progress value cannot overwrite newer Trakt playback;
+- a newer Nuvio progress value can replace older Trakt playback;
+- if the item was subsequently marked watched, stale playback from before that watched timestamp is removed.
 
-You can use the site purely as a Nuvio artwork repair utility. No Trakt ZIP is required.
+### Trakt-only data
 
-The repair flow:
+Ratings, custom lists, social data, preferences, and other unrelated Trakt export files are left alone.
 
-1. Sign in to Nuvio Sync.
-2. Select and read the Nuvio profile.
-3. Download the mandatory backup.
-4. Paste your own **TMDB API Read Access Token** into the repair field.
-5. Run **Repair existing artwork**.
+Files that do not need a watch-history-related change are copied into the new ZIP without being rewritten. Only the tracking files that actually require a merge are regenerated.
 
-For compatible Library items, the importer asks TMDB for current poster and background paths and writes only those artwork fields back to Nuvio. It does not intentionally change Library membership, watched status, Continue Watching, or tracking timestamps.
+## ID matching
 
-```mermaid
-flowchart LR
-    A[Existing Nuvio Library] --> B[Public movie / TV ID]
-    B --> C[TMDB using your token]
-    C --> D[Poster + background URLs]
-    D --> E[Nuvio Library]
-    E --> F[Read back + verify]
-```
+The reverse exporter reconciles supported IMDb, TMDB, Trakt, and TVDB identifiers found in the original archive. This helps avoid duplicate records when Nuvio identifies an item using a different supported public ID than the one that appears first in the Trakt record.
+
+## Important replay limitation
+
+Nuvio Sync exposes the current watched state and latest watched timestamp; it does not provide this tool with a complete event-by-event replay history.
+
+If you watched the same movie or episode multiple times after leaving Trakt, the exporter can preserve the newest known watched state, but it cannot reconstruct every missing replay event that Nuvio never stored separately.
 
 ---
 
-# Typical use cases
-
-### "Nuvio's normal Trakt import only brought over part of my history"
-
-Download the Trakt export ZIP and use **Merge & refresh**. The importer parses the exported files directly rather than depending on the live Trakt connection to enumerate everything during the migration.
-
-### "I already have newer activity in Nuvio"
-
-Use **Merge & refresh**. New Trakt records are added, but newer Nuvio watched/progress timestamps are preserved.
-
-### "I don't trust anything to overwrite my current Nuvio records"
-
-Use **Only bring new items**.
-
-### "I want Nuvio to reflect the exported Trakt set"
-
-Use **Mirror the Trakt import**. Review the projected add/update/remove counts carefully before applying it.
-
-### "My current Nuvio tracking data is a mess and I want to start over"
-
-Use **Reset tracking data & import fresh** after downloading the backup. The importer verifies each clear stage before rebuilding.
-
-### "My posters are broken but my tracking data is fine"
-
-Skip the Trakt ZIP and use **Repair existing artwork** with your own TMDB token.
-
----
-
-# How to use it
+# Reverse-export workflow
 
 ```mermaid
 flowchart TD
-    A[Download your Trakt export ZIP] --> B[Open the importer]
-    B --> C[Choose the ZIP]
-    C --> D[Resolve metadata / runtimes]
-    D --> E[Sign in to Nuvio Sync]
-    E --> F[Select Nuvio profile]
-    F --> G[Read existing Nuvio data]
-    G --> H[Download backup]
-    H --> I[Choose import strategy]
-    I --> J[Review projected changes]
-    J --> K[Apply]
-    K --> L[Read back + verify]
+    A[Original Trakt export ZIP] --> C[Browser merge engine]
+    B[Current Nuvio Sync profile] --> C
+    C --> D[Compare IDs + timestamps]
+    D --> E[Keep newer tracking state]
+    E --> F[Add Nuvio Library items to Trakt watchlist]
+    F --> G[Preserve unrelated Trakt files]
+    G --> H[Merged Trakt-style ZIP]
 ```
 
-### Step 1: Export from Trakt
+Before download, the UI shows projected counts for:
 
-Use Trakt's data-export feature and keep the original ZIP. The importer reads the JSON files inside the archive directly in your browser.
-
-### Step 2: Resolve metadata
-
-TMDB is recommended because it can provide reliable poster/background paths and runtime metadata. Cinemeta remains available as a fallback for supported metadata/runtime lookups.
-
-### Step 3: Sign in to Nuvio
-
-The page uses Nuvio's TV-style approval flow. The Nuvio access token exists only in the current page memory and is discarded when the page closes or refreshes.
-
-### Step 4: Read Nuvio and download the backup
-
-The importer reads the selected profile before enabling writes. A pre-change JSON backup is mandatory.
-
-### Step 5: Pick a strategy and review the preview
-
-The interface shows projected changes for:
-
-- Library
-- watched status
-- Continue Watching
-
-including how many records will be added, updated, removed, and remain after the operation.
-
-### Step 6: Apply and verify
-
-After writing, the importer pulls Nuvio Sync again and compares the result against the selected strategy. A successful screen means the expected keys were found after the operation.
+- Nuvio Library items being added to the Trakt watchlist;
+- newer watched states being added;
+- playback positions being added or updated;
+- stale playback positions being removed because a later watched state exists;
+- final watch-history, watchlist, and playback counts.
 
 ---
 
-# Metadata and artwork
+# Nuvio Sync access
 
-The lookup order is intentionally conservative:
+The browser uses Nuvio's TV-style approval flow and the Sync functions exposed to the approved session.
 
-1. **TMDB first, recommended** for posters, backgrounds, title metadata, and runtime. Each user supplies their own TMDB API Read Access Token.
-2. **Cinemeta fallback** when TMDB is not used or cannot resolve an item. MetaHub artwork URLs are intentionally discarded.
-3. **Manual runtime fallback** when neither provider can resolve the runtime needed for Continue Watching conversion.
+The current implementation reads:
 
-TMDB-only Trakt records are supported. For TV Continue Watching entries, the importer uses individual episode runtime when TMDB provides it.
+- profiles;
+- Library;
+- watched movie/episode states;
+- Continue Watching / playback state.
 
-## Why MetaHub artwork is rejected
-
-Some Nuvio users reported MetaHub-hosted poster URLs failing to load reliably on their devices or networks. Cinemeta can still provide useful metadata/runtime information, but this importer refuses to persist MetaHub artwork URLs into Nuvio.
-
-## Your TMDB credential
-
-Use the **API Read Access Token** from your own TMDB account.
-
-The importer does not save it in cookies, `localStorage`, `sessionStorage`, IndexedDB, a database, or a file. During metadata or artwork repair, it is sent directly from your browser to `api.themoviedb.org` in the authorization header and is cleared from the page/in-memory state when the operation finishes.
-
-TMDB authentication documentation: <https://developer.themoviedb.org/docs/authentication-application>
+The reverse exporter is read-only with respect to Nuvio. It never writes back to the selected Nuvio profile.
 
 ---
 
 # Privacy model
 
-The application is a static HTML page. It has no project application server, database, analytics, advertising, cookies, or browser storage.
-
 | Data | Where it goes |
 | --- | --- |
-| Trakt ZIP contents | Browser memory only; never uploaded by the importer |
-| Nuvio approval code/account token | Directly between your browser and Nuvio; held in memory |
-| Existing and converted Nuvio records | Directly between your browser and Nuvio Sync |
-| Your TMDB API Read Access Token | Directly from your browser to TMDB during the requested lookup/repair |
-| Public TMDB/IMDb IDs and episode coordinates | To the metadata provider required for the lookup |
+| Trakt ZIP contents | Browser memory only; never uploaded by this project |
+| Nuvio approval/session token | Directly between the browser and Nuvio; held in memory |
+| Nuvio tracking records | Directly between the browser and Nuvio Sync |
+| User-supplied TMDB token | Directly from the browser to TMDB during requested metadata/artwork lookup |
+| Public media IDs / episode coordinates | Metadata provider only when a metadata lookup is requested |
 | Site request metadata | GitHub Pages may receive normal web-hosting request logs |
 
-The Trakt ZIP, Nuvio token, watch timestamps, ratings, playback percentages, and account data are not sent to TMDB or Cinemeta by the importer.
+The application does not intentionally store credentials or tracking data in cookies, `localStorage`, `sessionStorage`, IndexedDB, an application database, or an application server.
 
-Google Sans Flex is bundled into the generated HTML, so loading the app does not need Google Fonts. See [PRIVACY.md](PRIVACY.md) for the full disclosure.
+Google Sans Flex is bundled into the generated HTML, so the application does not need Google Fonts at runtime.
+
+See [PRIVACY.md](PRIVACY.md) for the complete disclosure.
 
 ---
 
 # Safety controls
 
-- Mandatory pre-change backup before write operations.
-- Typed confirmation for **Mirror** and **Fresh reset**.
-- Read-back verification after imports and artwork repair.
-- Fresh reset verifies each clear stage before rebuilding.
-- Mirror verifies the Library result before watched/progress removals.
-- Exact-hash Content Security Policy for the inline application bundle.
-- Network connections restricted to Nuvio, TMDB, and the consent-gated Cinemeta fallback.
-- No third-party runtime JavaScript, analytics, service workers, or browser storage APIs.
-- Bundle tests verify that TMDB credentials are not embedded or persisted.
+For Trakt → Nuvio writes:
+
+- mandatory pre-change backup;
+- projected change preview;
+- typed confirmation for destructive strategies;
+- staged clears for fresh reset;
+- read-back verification after writes;
+- operations stop when expected destructive steps cannot be verified.
+
+For Nuvio → Trakt export:
+
+- Nuvio is read-only;
+- the original Trakt ZIP is not modified on disk;
+- a new ZIP is generated as a separate download;
+- unrelated Trakt files are preserved;
+- only newer Nuvio state is allowed to supersede older tracking state.
+
+The generated application bundle uses a hash-based Content Security Policy and restricts network connections to the services needed by the selected workflow.
 
 ---
 
 # Run locally
-
-The local build uses the same browser-only architecture as the hosted page.
 
 ```sh
 npm ci
@@ -271,22 +229,13 @@ npm run verify:bundle
 Then open the generated `index.html` or `Nuvio-Trakt-Importer.html` in a current browser.
 
 The generated page is self-contained, including the ZIP parser and bundled font. There is no application server to configure.
+
 ---
 
-# Version history
-
-See [CHANGELOG.md](CHANGELOG.md) for user-facing release notes.
-
-Current release: **v1.2.0**
-
-Built against `NuvioMedia/NuvioTV` commit `a4e0c71678dc8364a4bf2175e8fa96c641da41d9`.
-
-This is an independent community project and is not affiliated with or endorsed by Nuvio, Trakt, or TMDB.
-
-This product uses the TMDB API but is not endorsed or certified by TMDB.
-
-## License
+# License
 
 Application code: [MIT License](LICENSE)  
 Google Sans Flex: [SIL Open Font License 1.1](FONT-LICENSE.txt)  
 Other bundled notices: [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)
+
+This is an independent community project and is not affiliated with or endorsed by Nuvio, Trakt, or TMDB.
