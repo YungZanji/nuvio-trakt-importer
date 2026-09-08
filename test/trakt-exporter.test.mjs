@@ -79,3 +79,51 @@ test("newest playback timing wins and a later finished state removes stale playb
   assert.equal(episode.paused_at, "2026-05-04T00:00:00.000Z");
   assert.equal(result.summary.playbackRemovedBecauseFinished >= 1, true);
 });
+
+test("matches Nuvio TMDB IDs to the same Trakt media instead of creating duplicates", () => {
+  const result = buildMergedTraktExport(fixture(), {
+    library: [
+      { content_id: "tmdb:10", content_type: "movie", name: "Example Movie", added_at: Date.parse("2026-01-01") },
+    ],
+    watchedItems: [
+      { content_id: "tmdb:10", content_type: "movie", watched_at: Date.parse("2024-01-01T00:00:00Z") },
+    ],
+    watchProgress: [],
+  });
+
+  assert.equal(result.summary.watchlistAdded, 0);
+  assert.equal(result.summary.watchedAdded, 0);
+  assert.equal(result.updates.has("lists-watchlist.json"), false);
+  assert.equal(result.updates.has("watched-history-1.json"), false);
+});
+
+test("updates an existing watched-movie summary in its original numbered file", () => {
+  const files = fixture();
+  const originalMovie = JSON.parse(files.get("watched-movies-1.json"))[0];
+  files.set("watched-movies-2.json", JSON.stringify([]));
+
+  const result = buildMergedTraktExport(files, {
+    library: [],
+    watchedItems: [
+      { content_id: "tt1000001", content_type: "movie", watched_at: Date.parse("2026-06-01T00:00:00Z") },
+    ],
+    watchProgress: [],
+  });
+
+  const firstPage = JSON.parse(result.updates.get("watched-movies-1.json"));
+  assert.equal(firstPage[0].plays, originalMovie.plays + 1);
+  assert.equal(firstPage[0].last_watched_at, "2026-06-01T00:00:00.000Z");
+  assert.equal(result.updates.has("watched-movies-2.json"), false);
+});
+
+test("does not rewrite unrelated or unchanged Trakt files when Nuvio has nothing newer", () => {
+  const files = fixture();
+  const result = buildMergedTraktExport(files, {
+    library: [{ content_id: "tt1000001", content_type: "movie", added_at: Date.parse("2024-01-01") }],
+    watchedItems: [{ content_id: "tt1000001", content_type: "movie", watched_at: Date.parse("2024-01-01") }],
+    watchProgress: [],
+  });
+
+  assert.equal(result.updates.size, 0);
+  assert.equal(result.summary.preservedFiles, files.size);
+});
