@@ -34,7 +34,7 @@ The site now has two separate workflows:
 
 Both workflows run in the browser. The project has no application server, database, analytics, cookies, or persistent browser storage.
 
-The original Trakt ZIP is never uploaded by this tool.
+The original Trakt ZIP is never uploaded by this tool. Reverse export creates a separate merged ZIP and never modifies the source archive on disk.
 
 ---
 
