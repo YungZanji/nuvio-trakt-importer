@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { patchAppSource } from "./src/app-transform.mjs";
+import { patchExportUiSource } from "./src/export-ui-transform.mjs";
 
 const root = resolve(import.meta.dirname);
 const buildDir = resolve(root, ".build");
@@ -10,7 +11,7 @@ const outJs = resolve(buildDir, "app.js");
 
 await mkdir(buildDir, { recursive: true });
 const originalApp = await readFile(resolve(root, "src/app.mjs"), "utf8");
-const patchedApp = patchAppSource(originalApp);
+const patchedApp = patchExportUiSource(patchAppSource(originalApp));
 
 await build({
   stdin: {
@@ -27,16 +28,17 @@ await build({
   legalComments: "none",
 });
 
-const [template, css, js, packageText, font] = await Promise.all([
+const [template, css, exportCss, js, packageText, font] = await Promise.all([
   readFile(resolve(root, "src/index.template.html"), "utf8"),
   readFile(resolve(root, "src/styles.css"), "utf8"),
+  readFile(resolve(root, "src/export-ui.css"), "utf8"),
   readFile(outJs, "utf8"),
   readFile(resolve(root, "package.json"), "utf8"),
   readFile(resolve(root, "src/assets/google-sans-flex-latin.woff2")),
 ]);
 
 const fontData = `data:font/woff2;base64,${font.toString("base64")}`;
-const bundledCss = css.replace("__GOOGLE_SANS_FLEX_DATA__", () => fontData);
+const bundledCss = `${css}\n${exportCss}`.replace("__GOOGLE_SANS_FLEX_DATA__", () => fontData);
 const sha256 = (value) => createHash("sha256").update(value).digest("base64");
 const csp = [
   "default-src 'none'",
