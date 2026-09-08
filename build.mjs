@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { patchAppSource } from "./src/app-transform.mjs";
 import { patchExportUiSource } from "./src/export-ui-transform.mjs";
+import { patchExportTemplate } from "./src/export-template.mjs";
 
 const root = resolve(import.meta.dirname);
 const buildDir = resolve(root, ".build");
@@ -53,7 +54,8 @@ const csp = [
   "frame-src 'none'",
   "worker-src 'none'",
 ].join("; ");
-const html = template
+const patchedTemplate = patchExportTemplate(template);
+const html = patchedTemplate
   .replace("/* APP_CSP */", () => csp)
   .replace("/* APP_CSS */", () => bundledCss)
   .replace("/* APP_JS */", () => js);
