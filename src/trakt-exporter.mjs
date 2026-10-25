@@ -144,14 +144,15 @@ function libraryByContentId(library, mediaIndex) {
   return index;
 }
 
-function resolveMedia(item, type, mediaIndex, libraryIndex) {
+function resolveMedia(item, type, mediaIndex, libraryIndex, metadata = new Map()) {
   const key = mediaIndex.canonicalContentId(item?.content_id);
   const indexed = mediaIndex.media.get(key);
   if (indexed?.media) return clone(indexed.media);
 
+  const enrichment = metadata.get(String(item?.content_id || "").toLowerCase());
   const libraryItem = libraryIndex.get(key);
-  const title = libraryItem?.name || item?.title || item?.name || String(item?.content_id || "Unknown title");
-  const raw = libraryItem?.release_info ?? libraryItem?.year ?? item?.release_info ?? item?.year ?? "";
+  const title = enrichment?.name || libraryItem?.name || item?.title || item?.name || String(item?.content_id || "Unknown title");
+  const raw = enrichment?.releaseInfo ?? libraryItem?.release_info ?? libraryItem?.year ?? item?.release_info ?? item?.year ?? "";
   const yearMatch = String(raw).match(/\b(19|20)\d{2}\b/);
   const ids = idsFromContentId(item?.content_id || libraryItem?.content_id);
   const media = { title, ids };
@@ -159,13 +160,14 @@ function resolveMedia(item, type, mediaIndex, libraryIndex) {
   return media;
 }
 
-function resolveEpisode(item, show, mediaIndex) {
+function resolveEpisode(item, show, mediaIndex, metadata = new Map()) {
   const showKey = mediaIndex.canonicalMedia(show) || mediaIndex.canonicalContentId(item?.content_id);
   const season = Number(item?.season);
   const episode = Number(item?.episode);
   const indexed = mediaIndex.episodes.get(`${showKey}|s${season}e${episode}`);
   if (indexed) return clone(indexed);
-  return { season, number: episode };
+  const enrichment = metadata.get(String(item?.content_id || "").toLowerCase() + "|s" + season + "e" + episode);
+  return { season, number: episode, ...(enrichment?.episodeTitle ? { title: enrichment.episodeTitle } : {}) };
 }
 
 function findPathByBasename(textFiles, wanted) {
@@ -261,9 +263,9 @@ function latestPlaybackMap(playback, mediaIndex) {
   return map;
 }
 
-function makeWatchlistEntry(item, mediaIndex, libraryIndex) {
+function makeWatchlistEntry(item, mediaIndex, libraryIndex, metadata) {
   const type = String(item?.content_type || "").toLowerCase() === "movie" ? "movie" : "show";
-  const media = resolveMedia(item, type, mediaIndex, libraryIndex);
+  const media = resolveMedia(item, type, mediaIndex, libraryIndex, metadata);
   return type === "movie"
     ? { type: "movie", movie: media, listed_at: toIso(item?.added_at) }
     : { type: "show", show: media, listed_at: toIso(item?.added_at) };
@@ -287,27 +289,27 @@ function libraryIdentity(item, mediaIndex) {
   return key ? `${key}|${type}` : "";
 }
 
-function makeHistoryEntry(item, mediaIndex, libraryIndex) {
+function makeHistoryEntry(item, mediaIndex, libraryIndex, metadata) {
   const watchedAt = toIso(item?.watched_at);
   const season = item?.season == null ? null : Number(item.season);
   const episode = item?.episode == null ? null : Number(item.episode);
   if (Number.isInteger(season) && Number.isInteger(episode)) {
-    const show = resolveMedia(item, "show", mediaIndex, libraryIndex);
+    const show = resolveMedia(item, "show", mediaIndex, libraryIndex, metadata);
     return {
       type: "episode",
       show,
-      episode: resolveEpisode(item, show, mediaIndex),
+      episode: resolveEpisode(item, show, mediaIndex, metadata),
       watched_at: watchedAt,
     };
   }
   return {
     type: "movie",
-    movie: resolveMedia(item, "movie", mediaIndex, libraryIndex),
+    movie: resolveMedia(item, "movie", mediaIndex, libraryIndex, metadata),
     watched_at: watchedAt,
   };
 }
 
-function makePlaybackEntry(item, mediaIndex, libraryIndex) {
+function makePlaybackEntry(item, mediaIndex, libraryIndex, metadata) {
   const duration = Number(item?.duration || 0);
   const position = Number(item?.position || 0);
   if (!(duration > 0) || !(position > 0)) return null;
@@ -315,18 +317,18 @@ function makePlaybackEntry(item, mediaIndex, libraryIndex) {
   const season = item?.season == null ? null : Number(item.season);
   const episode = item?.episode == null ? null : Number(item.episode);
   if (Number.isInteger(season) && Number.isInteger(episode)) {
-    const show = resolveMedia(item, "show", mediaIndex, libraryIndex);
+    const show = resolveMedia(item, "show", mediaIndex, libraryIndex, metadata);
     return {
       type: "episode",
       show,
-      episode: resolveEpisode(item, show, mediaIndex),
+      episode: resolveEpisode(item, show, mediaIndex, metadata),
       progress: Number(progress.toFixed(4)),
       paused_at: toIso(item?.last_watched),
     };
   }
   return {
     type: "movie",
-    movie: resolveMedia(item, "movie", mediaIndex, libraryIndex),
+    movie: resolveMedia(item, "movie", mediaIndex, libraryIndex, metadata),
     progress: Number(progress.toFixed(4)),
     paused_at: toIso(item?.last_watched),
   };
@@ -385,11 +387,16 @@ function findMovieSummaryLocation(movieArrays, movie, mediaIndex) {
   return -1;
 }
 
-export function buildMergedTraktExport(textFiles, nuvioData = {}) {
+// Options are evaluated before writing any Trakt JSON, so skipped edits never
+// modify history summaries or leave partially-applied changes in the ZIP.
+export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) {
   if (!(textFiles instanceof Map) || textFiles.size === 0) throw new Error("Choose the original Trakt export ZIP first.");
   const library = asArray(nuvioData.library);
   const watchedItems = asArray(nuvioData.watchedItems);
   const watchProgress = asArray(nuvioData.watchProgress);
+  const excluded = new Set(options.excluded || []);
+  const metadata = options.metadata instanceof Map ? options.metadata : new Map();
+  const changes = { watchlist: [], history: [], playback: [] };
 
   const parsedFiles = parseAllJson(textFiles);
   const mediaIndex = buildMediaIndex(parsedFiles);
@@ -403,19 +410,22 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
   const originalWatchlist = watchlist.length;
   let watchlistAdded = 0;
   let unresolvedLibrary = 0;
-  for (const item of library) {
+  for (const [index, item] of library.entries()) {
+    const changeId = "library:" + index;
     const key = libraryIdentity(item, mediaIndex);
     if (!key) {
       unresolvedLibrary++;
       continue;
     }
     if (watchlistKeys.has(key)) continue;
-    const entry = makeWatchlistEntry(item, mediaIndex, libraryIndex);
+    const entry = makeWatchlistEntry(item, mediaIndex, libraryIndex, metadata);
     const entryKey = watchlistIdentity(entry, mediaIndex) || key;
     if (!entryKey) {
       unresolvedLibrary++;
       continue;
     }
+    changes.watchlist.push({ id: changeId, entry, action: "add" });
+    if (excluded.has(changeId)) continue;
     watchlist.push(entry);
     watchlistKeys.add(entryKey);
     watchlistAdded++;
@@ -442,19 +452,24 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
   let showSummaryChanged = false;
 
   const latestWatched = maxHistoryTimestamp(history, movieSummaries, mediaIndex);
+  const newNuvioFinishes = new Set();
   let watchedAdded = 0;
   let movieWatchedAdded = 0;
   let episodeWatchedAdded = 0;
 
-  for (const item of watchedItems) {
+  for (const [index, item] of watchedItems.entries()) {
+    const changeId = "watched:" + index;
     const identity = watchedIdentityFromNuvio(item, mediaIndex);
     const watchedAt = parseTimestamp(item?.watched_at);
     if (!identity || !(watchedAt > (latestWatched.get(identity) || 0))) continue;
 
-    const entry = makeHistoryEntry(item, mediaIndex, libraryIndex);
+    const entry = makeHistoryEntry(item, mediaIndex, libraryIndex, metadata);
+    changes.history.push({ id: changeId, entry, action: "add" });
+    if (excluded.has(changeId)) continue;
     targetHistory.push(entry);
     history.push(entry);
     latestWatched.set(identity, watchedAt);
+    newNuvioFinishes.add(identity);
     watchedAdded++;
 
     if (entry.type === "movie") {
@@ -489,11 +504,13 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
   let playbackUpdated = 0;
   let playbackRemovedBecauseFinished = 0;
   let playbackSkipped = 0;
+  const protectedPlaybackKeys = new Set();
 
-  for (const item of watchProgress) {
+  for (const [index, item] of watchProgress.entries()) {
+    const changeId = "progress:" + index;
     const key = watchedIdentityFromNuvio(item, mediaIndex);
     if (!key) continue;
-    const candidate = makePlaybackEntry(item, mediaIndex, libraryIndex);
+    const candidate = makePlaybackEntry(item, mediaIndex, libraryIndex, metadata);
     if (!candidate) {
       playbackSkipped++;
       continue;
@@ -503,9 +520,13 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
     if (watchedAt >= pausedAt) continue;
     const existing = playbackByKey.get(key);
     if (!existing) {
+      changes.playback.push({ id: changeId, entry: candidate, previous: null, action: "add" });
+      if (excluded.has(changeId)) { protectedPlaybackKeys.add(key); continue; }
       playbackByKey.set(key, candidate);
       playbackAdded++;
     } else if (pausedAt > parseTimestamp(existing.paused_at)) {
+      changes.playback.push({ id: changeId, entry: candidate, previous: existing, action: "update" });
+      if (excluded.has(changeId)) { protectedPlaybackKeys.add(key); continue; }
       playbackByKey.set(key, candidate);
       playbackUpdated++;
     }
@@ -513,7 +534,10 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
 
   for (const [key, existing] of [...playbackByKey]) {
     const watchedAt = latestWatched.get(key) || 0;
-    if (watchedAt > 0 && watchedAt >= parseTimestamp(existing.paused_at)) {
+    if (!protectedPlaybackKeys.has(key) && newNuvioFinishes.has(key) && watchedAt > 0 && watchedAt >= parseTimestamp(existing.paused_at)) {
+      const changeId = "finish:" + key;
+      changes.playback.push({ id: changeId, entry: existing, previous: existing, action: "clear" });
+      if (excluded.has(changeId)) continue;
       playbackByKey.delete(key);
       playbackRemovedBecauseFinished++;
     }
@@ -531,6 +555,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}) {
 
   return {
     updates,
+    changes,
     summary: {
       originalWatchlist,
       nuvioLibrary: library.length,

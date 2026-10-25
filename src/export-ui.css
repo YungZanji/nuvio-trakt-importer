@@ -196,3 +196,28 @@
     max-height: 240px;
   }
 }
+
+/* Reverse migration review controls */
+.export-metadata-tool, .export-select-controls {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  background: rgba(255,255,255,.025);
+}
+.export-metadata-tool label { display:block; margin:10px 0 6px; font-weight:600; }
+#export-metadata-token { display:block; width:100%; max-width:560px; }
+.export-select-controls .button-row { display:flex; flex-wrap:wrap; gap:8px; }
+.export-change-list .export-choice {
+  display:flex;
+  gap:12px;
+  align-items:flex-start;
+  cursor:pointer;
+  padding:8px 4px;
+  line-height:1.5;
+}
+.export-choice input { flex:0 0 auto; margin-top:5px; width:17px; height:17px; accent-color:#9278ff; }
+.export-choice .change-copy { min-width:0; overflow-wrap:anywhere; }
+.export-choice .change-code { display:block; font-size:.78rem; opacity:.72; margin-top:3px; }
+.export-choice:has(input:not(:checked)) .change-copy { opacity:.52; text-decoration:line-through; }
+.export-change-list li { list-style:none; }
