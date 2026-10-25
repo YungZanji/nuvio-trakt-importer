@@ -127,3 +127,77 @@ test("does not rewrite unrelated or unchanged Trakt files when Nuvio has nothing
   assert.equal(result.updates.size, 0);
   assert.equal(result.summary.preservedFiles, files.size);
 });
+
+test("reverse review exclusions omit actual watchlist, history and progress edits", () => {
+  const files = fixture();
+  const remote = {
+    library: [{ content_id: "tt2000002", content_type: "series", added_at: Date.parse("2026-01-01") }],
+    watchedItems: [
+      { content_id: "tt1000001", content_type: "movie", watched_at: Date.parse("2026-02-01") },
+      { content_id: "tt2000002", content_type: "series", season: 1, episode: 2, watched_at: Date.parse("2026-02-02") },
+    ],
+    watchProgress: [
+      { content_id: "tt2000002", content_type: "series", season: 1, episode: 2, position: 75_000, duration: 100_000, last_watched: Date.parse("2026-02-03") },
+    ],
+  };
+  const all = buildMergedTraktExport(files, remote);
+  assert.equal(all.summary.watchlistAdded, 1);
+  assert.equal(all.summary.watchedAdded, 2);
+  assert.equal(all.summary.playbackUpdated, 1);
+  assert.equal(all.changes.watchlist[0].id, "library:0");
+  const selected = buildMergedTraktExport(files, remote, { excluded: new Set(["library:0", "watched:0", "progress:0"]) });
+  assert.equal(selected.summary.watchlistAdded, 0);
+  assert.equal(selected.summary.watchedAdded, 1);
+  assert.equal(selected.summary.playbackUpdated, 0);
+  assert.equal(selected.updates.has("lists-watchlist.json"), false);
+  assert.equal(selected.updates.has("watched-playback.json"), false);
+  assert.equal(selected.summary.finalHistoryPlays, 3);
+  const history = JSON.parse(selected.updates.get("watched-history-1.json"));
+  assert.equal(history.some((row) => row.type === "movie" && row.watched_at.startsWith("2026")), false);
+});
+
+test("excluding every change preserves source files byte for byte", () => {
+  const files = fixture();
+  const remote = {
+    library: [{ content_id: "tt2000002", content_type: "series", added_at: Date.parse("2026-01-01") }],
+    watchedItems: [{ content_id: "tt1000001", content_type: "movie", watched_at: Date.parse("2026-02-01") }],
+    watchProgress: [],
+  };
+  const preview = buildMergedTraktExport(files, remote);
+  const excluded = new Set(Object.values(preview.changes).flat().map((row) => row.id));
+  const result = buildMergedTraktExport(files, remote, { excluded });
+  assert.equal(result.updates.size, 0);
+  assert.equal(result.summary.watchlistAdded, 0);
+  assert.equal(result.summary.watchedAdded, 0);
+});
+
+test("metadata enrichment replaces unreadable IMDb titles without changing IDs", () => {
+  const files = fixture();
+  const remote = {
+    library: [{ content_id: "tt9999999", content_type: "series", added_at: Date.parse("2026-01-01") }],
+    watchedItems: [{ content_id: "tt9999999", content_type: "series", season: 2, episode: 4, watched_at: Date.parse("2026-02-01") }],
+    watchProgress: [],
+  };
+  const metadata = new Map([
+    ["tt9999999", { name: "Resolved Show", releaseInfo: "2024" }],
+    ["tt9999999|s2e4", { episodeTitle: "Resolved Episode" }],
+  ]);
+  const result = buildMergedTraktExport(files, remote, { metadata });
+  const watchlist = JSON.parse(result.updates.get("lists-watchlist.json"));
+  const history = JSON.parse(result.updates.get("watched-history-1.json"));
+  assert.equal(watchlist.at(-1).show.title, "Resolved Show");
+  assert.equal(watchlist.at(-1).show.ids.imdb, "tt9999999");
+  assert.equal(history.at(-1).episode.title, "Resolved Episode");
+});
+
+test("excluding a recent Nuvio finish keeps an original Trakt resume position", () => {
+  const files = fixture();
+  const remote = {
+    library: [],
+    watchedItems: [{ content_id: "tt1000001", content_type: "movie", watched_at: Date.parse("2026-02-01") }],
+    watchProgress: [],
+  };
+  const result = buildMergedTraktExport(files, remote, { excluded: new Set(["watched:0"]) });
+  assert.equal(result.updates.has("watched-playback.json"), false);
+  assert.equal(result.updates.size, 0);
+});
