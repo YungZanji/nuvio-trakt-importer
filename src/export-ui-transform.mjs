@@ -13,6 +13,10 @@ export function patchExportUiSource(source) {
 let exportArchiveFiles = null;
 let exportArchiveTextFiles = null;
 let exportMergeResult = null;
+let exportCandidates = null;
+let exportExcludedChanges = new Set();
+let exportMetadata = new Map();
+let exportLookupInFlight = false;
 
 const state = {
 `,
@@ -125,7 +129,25 @@ function exportTitleLabel(entry) {
   return title + yearText;
 }
 
-function exportPopulateChangeList(listId, countId, rows, emptyText) {
+function exportChangeLabel(row, kind) {
+  const entry = row.entry;
+  const title = exportTitleLabel(entry);
+  if (kind === "watchlist") return (entry?.movie ? "Movie" : "Show") + " · " + title + " · added " + exportFormatTimestamp(entry?.listed_at);
+  if (kind === "history") return (entry?.type === "episode" ? "Episode" : "Movie") + " · " + title + " · watched " + exportFormatTimestamp(entry?.watched_at);
+  if (row.action === "clear") return "Clear finished playback · " + title + " · was " + Number(entry?.progress || 0).toFixed(1) + "%";
+  if (row.action === "update") return "Update · " + title + " · " + Number(row.previous?.progress || 0).toFixed(1) + "% → " + Number(entry?.progress || 0).toFixed(1) + "% · paused " + exportFormatTimestamp(entry?.paused_at);
+  return "Add · " + title + " · " + Number(entry?.progress || 0).toFixed(1) + "% · paused " + exportFormatTimestamp(entry?.paused_at);
+}
+
+function exportChangeCode(entry) {
+  const media = exportEntryMedia(entry);
+  const ids = media?.ids || {};
+  const id = ids.imdb || (ids.tmdb ? "tmdb:" + ids.tmdb : ids.tvdb ? "tvdb:" + ids.tvdb : "");
+  const unknown = !media?.title || /^(tt\d+|tmdb:\d+|tvdb:\d+|unknown title)$/i.test(String(media.title));
+  return (unknown ? "Unresolved title · " : "Media ID · ") + (id || "unidentified");
+}
+
+function exportPopulateChangeList(listId, countId, rows, emptyText, kind) {
   const list = $(listId);
   const count = $(countId);
   if (count) count.textContent = formatNumber(rows.length);
@@ -138,78 +160,114 @@ function exportPopulateChangeList(listId, countId, rows, emptyText) {
     list.append(item);
     return;
   }
-  for (const text of rows) {
+  for (const row of rows) {
     const item = document.createElement("li");
-    item.textContent = text;
+    const label = document.createElement("label");
+    label.className = "export-choice";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !exportExcludedChanges.has(row.id);
+    input.setAttribute("aria-label", "Include " + exportChangeLabel(row, kind));
+    input.addEventListener("change", () => {
+      if (input.checked) exportExcludedChanges.delete(row.id);
+      else exportExcludedChanges.add(row.id);
+      renderExportPreview();
+    });
+    const copy = document.createElement("span");
+    copy.className = "change-copy";
+    const title = document.createElement("span");
+    title.textContent = exportChangeLabel(row, kind);
+    const code = document.createElement("small");
+    code.className = "change-code";
+    code.textContent = exportChangeCode(row.entry);
+    copy.append(title, code);
+    label.append(input, copy);
+    item.append(label);
     list.append(item);
   }
 }
 
-function exportCollectExactChanges(result) {
-  const changes = { watchlist: [], history: [], playback: [] };
-  for (const [path, text] of result?.updates || []) {
-    const base = exportBasename(path).toLowerCase();
-    let after = [];
-    try {
-      const parsed = JSON.parse(text);
-      after = Array.isArray(parsed) ? parsed : [];
-    } catch {
-      continue;
-    }
-    const before = exportReadArray(exportArchiveTextFiles, path);
+function renderExportExactChanges(candidate) {
+  const changes = candidate.changes;
+  exportPopulateChangeList("export-detail-watchlist", "export-detail-watchlist-count", changes.watchlist, "No new watchlist items.", "watchlist");
+  exportPopulateChangeList("export-detail-history", "export-detail-history-count", changes.history, "No newer watched entries.", "history");
+  exportPopulateChangeList("export-detail-playback", "export-detail-playback-count", changes.playback, "No playback changes.", "playback");
+}
 
-    if (base === "lists-watchlist.json") {
-      const beforeKeys = new Set(before.map(exportEntryIdentity).filter(Boolean));
-      for (const entry of after) {
-        const key = exportEntryIdentity(entry);
-        if (!key || beforeKeys.has(key)) continue;
-        const type = entry?.movie ? "Movie" : "Show";
-        changes.watchlist.push(type + " · " + exportTitleLabel(entry) + " · listed " + exportFormatTimestamp(entry?.listed_at));
-      }
-      continue;
-    }
+function exportAllCandidateRows() {
+  if (!exportCandidates) return [];
+  return [...exportCandidates.changes.watchlist, ...exportCandidates.changes.history, ...exportCandidates.changes.playback];
+}
 
-    if (/^watched-history-\\d+\\.json$/i.test(base)) {
-      const beforeKeys = new Set(before.map(exportHistoryIdentity).filter(Boolean));
-      for (const entry of after) {
-        const key = exportHistoryIdentity(entry);
-        if (!key || beforeKeys.has(key)) continue;
-        const type = entry?.type === "episode" ? "Episode" : "Movie";
-        changes.history.push(type + " · " + exportTitleLabel(entry) + " · watched " + exportFormatTimestamp(entry?.watched_at));
-      }
-      continue;
+function exportMetadataTargets() {
+  const seen = new Set();
+  const targets = [];
+  for (const change of exportAllCandidateRows()) {
+    const media = exportEntryMedia(change.entry);
+    const ids = media?.ids || {};
+    const title = String(media?.title || "").trim();
+    const unknown = !title || /^(tt\d+|tmdb:\d+|tvdb:\d+|unknown title)$/i.test(title);
+    const missingEpisode = change.entry?.type === "episode" && !change.entry?.episode?.title;
+    if (!unknown && !missingEpisode) continue;
+    const contentId = ids.imdb || (ids.tmdb ? "tmdb:" + ids.tmdb : "");
+    if (!contentId) continue;
+    const lower = String(contentId).toLowerCase();
+    if (unknown && !seen.has(lower)) {
+      seen.add(lower);
+      targets.push({ id: lower, item: { content_id: contentId, content_type: change.entry?.movie ? "movie" : "series" } });
     }
-
-    if (base === "watched-playback.json") {
-      const beforeMap = new Map(before.map((entry) => [exportEntryIdentity(entry), entry]).filter(([key]) => key));
-      const afterMap = new Map(after.map((entry) => [exportEntryIdentity(entry), entry]).filter(([key]) => key));
-      for (const [key, entry] of afterMap) {
-        const previous = beforeMap.get(key);
-        const currentProgress = Number(entry?.progress || 0);
-        if (!previous) {
-          changes.playback.push("Added · " + exportTitleLabel(entry) + " · " + currentProgress.toFixed(1) + "% · paused " + exportFormatTimestamp(entry?.paused_at));
-          continue;
-        }
-        const previousProgress = Number(previous?.progress || 0);
-        const changed = previousProgress !== currentProgress || String(previous?.paused_at || "") !== String(entry?.paused_at || "");
-        if (changed) {
-          changes.playback.push("Updated · " + exportTitleLabel(entry) + " · " + previousProgress.toFixed(1) + "% → " + currentProgress.toFixed(1) + "% · paused " + exportFormatTimestamp(entry?.paused_at));
-        }
-      }
-      for (const [key, entry] of beforeMap) {
-        if (afterMap.has(key)) continue;
-        changes.playback.push("Cleared after newer finished state · " + exportTitleLabel(entry) + " · was " + Number(entry?.progress || 0).toFixed(1) + "% · paused " + exportFormatTimestamp(entry?.paused_at));
+    const season = Number(change.entry?.episode?.season);
+    const episode = Number(change.entry?.episode?.number);
+    if (missingEpisode && Number.isInteger(season) && Number.isInteger(episode)) {
+      const key = lower + "|s" + season + "e" + episode;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ id: key, item: { content_id: contentId, content_type: "series", season, episode } });
       }
     }
   }
-  return changes;
+  return targets;
 }
 
-function renderExportExactChanges(result) {
-  const changes = exportCollectExactChanges(result);
-  exportPopulateChangeList("export-detail-watchlist", "export-detail-watchlist-count", changes.watchlist, "No new Nuvio Library items need to be added to the Trakt watchlist.");
-  exportPopulateChangeList("export-detail-history", "export-detail-history-count", changes.history, "No newer watched states need to be added to Trakt history.");
-  exportPopulateChangeList("export-detail-playback", "export-detail-playback-count", changes.playback, "No Continue Watching positions need to change.");
+async function exportResolveTitles() {
+  if (exportLookupInFlight || !exportArchiveTextFiles || !state.remoteBefore) return;
+  const input = $("export-metadata-token");
+  const token = String(input?.value || "").trim();
+  if (input) input.value = "";
+  const targets = exportMetadataTargets().filter((item) => !exportMetadata.has(item.id));
+  if (!targets.length) {
+    $("export-meta-state").textContent = "No unidentified titles remain.";
+    return;
+  }
+  exportLookupInFlight = true;
+  updateExportReadiness();
+  let resolved = 0, unmatched = 0;
+  try {
+    // The user initiates each lookup; no private watch timestamps or Nuvio tokens are sent.
+    for (let i = 0; i < targets.length; i += 3) {
+      const group = targets.slice(i, i + 3);
+      const responses = await Promise.all(group.map(async (target) => {
+        try {
+          return { target, metadata: await resolveMetadata(target.item, { tmdbReadAccessToken: token }) };
+        } catch { return { target, metadata: null }; }
+      }));
+      for (const { target, metadata } of responses) {
+        const key = String(target.item.content_id).toLowerCase();
+        if (metadata?.name && !/^(tt\d+|tmdb:\d+)$/i.test(metadata.name)) {
+          exportMetadata.set(key, metadata);
+          if (target.id.includes("|s") && metadata.episodeTitle) exportMetadata.set(target.id, metadata);
+          resolved++;
+        } else unmatched++;
+      }
+      $("export-meta-state").textContent = "Checked " + Math.min(i + group.length, targets.length) + " of " + targets.length + " title/episode lookups…";
+    }
+    $("export-meta-state").textContent = "Resolved " + resolved + " lookups; " + unmatched + " unmatched. Unresolved IDs stay visible for review.";
+    renderExportPreview();
+  } finally {
+    if (input) input.value = "";
+    exportLookupInFlight = false;
+    updateExportReadiness();
+  }
 }
 
 function renderExportSourceSummary() {
@@ -240,6 +298,9 @@ async function onExportZipSelected(event) {
     exportArchiveTextFiles = exportJsonTextFiles(exportArchiveFiles);
     if (!exportArchiveTextFiles.size) throw new Error("No JSON files were found in this ZIP.");
     exportMergeResult = null;
+    exportCandidates = null;
+    exportExcludedChanges.clear();
+    exportMetadata.clear();
     renderExportSourceSummary();
     renderExportPreview();
     updateExportReadiness();
@@ -248,6 +309,9 @@ async function onExportZipSelected(event) {
     exportArchiveFiles = null;
     exportArchiveTextFiles = null;
     exportMergeResult = null;
+    exportCandidates = null;
+    exportExcludedChanges.clear();
+    exportMetadata.clear();
     updateExportReadiness();
     setStatus("Could not read this Trakt ZIP: " + (error.message || error), "error");
   }
@@ -262,7 +326,8 @@ function renderExportPreview() {
     return;
   }
   try {
-    exportMergeResult = buildMergedTraktExport(exportArchiveTextFiles, state.remoteBefore);
+    exportCandidates = buildMergedTraktExport(exportArchiveTextFiles, state.remoteBefore, { metadata: exportMetadata });
+    exportMergeResult = buildMergedTraktExport(exportArchiveTextFiles, state.remoteBefore, { metadata: exportMetadata, excluded: exportExcludedChanges });
     const summary = exportMergeResult.summary;
     $("export-count-watchlist").textContent = formatNumber(summary.watchlistAdded);
     $("export-count-watched").textContent = formatNumber(summary.watchedAdded);
@@ -271,13 +336,17 @@ function renderExportPreview() {
     $("export-final-history").textContent = formatNumber(summary.finalHistoryPlays);
     $("export-final-watchlist").textContent = formatNumber(summary.finalWatchlist);
     $("export-final-progress").textContent = formatNumber(summary.finalPlayback);
-    renderExportExactChanges(exportMergeResult);
+    renderExportExactChanges(exportCandidates);
+    const proposed = exportAllCandidateRows();
+    const selected = proposed.filter((row) => !exportExcludedChanges.has(row.id)).length;
+    $("export-selection-status").textContent = formatNumber(selected) + " of " + formatNumber(proposed.length) + " proposed changes included in the ZIP.";
     const warning = $("export-warnings");
     warning.textContent = exportMergeResult.warnings.join(" ");
     warning.hidden = exportMergeResult.warnings.length === 0;
     panel.hidden = false;
   } catch (error) {
     exportMergeResult = null;
+    exportCandidates = null;
     panel.hidden = false;
     $("export-warnings").hidden = false;
     $("export-warnings").textContent = "The merge preview could not be built safely: " + (error.message || error);
@@ -287,7 +356,8 @@ function renderExportPreview() {
 function updateExportReadiness() {
   const button = $("export-button");
   if (!button) return;
-  button.disabled = !(exportArchiveFiles && exportArchiveTextFiles && state.token && state.remoteBefore && state.selectedProfile && exportMergeResult);
+  button.disabled = exportLookupInFlight || !(exportArchiveFiles && exportArchiveTextFiles && state.token && state.remoteBefore && state.selectedProfile && exportMergeResult);
+  if ($("export-resolve-button")) $("export-resolve-button").disabled = exportLookupInFlight || !exportCandidates;
 }
 
 function downloadBytes(filename, bytes, type = "application/zip") {
@@ -307,7 +377,7 @@ function downloadMergedTraktArchive() {
   const button = $("export-button");
   setBusy(button, true, "Building merged archive…");
   try {
-    const result = buildMergedTraktExport(exportArchiveTextFiles, state.remoteBefore);
+    const result = buildMergedTraktExport(exportArchiveTextFiles, state.remoteBefore, { metadata: exportMetadata, excluded: exportExcludedChanges });
     const mergedFiles = { ...exportArchiveFiles };
     for (const [path, text] of result.updates) mergedFiles[path] = strToU8(text);
     const zip = zipSync(mergedFiles, { level: 6 });
@@ -387,7 +457,19 @@ $("tool-export-tab")?.addEventListener("click", () => setToolMode("export"));
 $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
+$("export-resolve-button")?.addEventListener("click", exportResolveTitles);
+$("export-select-all")?.addEventListener("click", () => { exportExcludedChanges.clear(); renderExportPreview(); });
+$("export-select-none")?.addEventListener("click", () => { for (const row of exportAllCandidateRows()) exportExcludedChanges.add(row.id); renderExportPreview(); });
 $("profile-select")?.addEventListener("change", () => {
+  if (activeTool === "export") {
+    state.remoteBefore = null;
+    state.selectedProfile = null;
+    exportExcludedChanges.clear();
+    exportMetadata.clear();
+    exportCandidates = null;
+    $("remote-summary").hidden = true;
+    setStatus("Profile changed. Click Read Nuvio data to load the selected profile.");
+  }
   exportMergeResult = null;
   renderExportPreview();
   updateExportReadiness();
