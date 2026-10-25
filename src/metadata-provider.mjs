@@ -80,6 +80,7 @@ async function fetchTmdb(item, token, fetchImpl) {
 
   return {
     _provider: "TMDB",
+    episodeTitle: episode?.name || null,
     name: details?.title || details?.name || item.name || item._name || null,
     poster: tmdbImage(details?.poster_path, "w500"),
     background: tmdbImage(details?.backdrop_path, "w1280"),
@@ -97,8 +98,14 @@ async function fetchCinemetaSafe(item, cinemetaBase, fetchImpl) {
   const body = await fetchJson(`${cinemetaBase}/meta/${type}/${encodeURIComponent(imdb)}.json`, { fetchImpl });
   const meta = body?.meta;
   if (!meta) return null;
+  const season = Number(item?.season);
+  const episode = Number(item?.episode);
+  const video = Array.isArray(meta.videos) && Number.isInteger(season) && Number.isInteger(episode)
+    ? meta.videos.find((row) => Number(row?.season) === season && Number(row?.episode) === episode)
+    : null;
   return {
     _provider: "Cinemeta fallback",
+    episodeTitle: video?.title || null,
     name: meta.name || null,
     poster: isMetaHubUrl(meta.poster) ? null : (meta.poster || null),
     background: isMetaHubUrl(meta.background) ? null : (meta.background || null),
@@ -119,6 +126,7 @@ function mergeMetadata(primary, fallback) {
     poster: primary.poster || fallback.poster || null,
     background: primary.background || fallback.background || null,
     description: primary.description || fallback.description || null,
+    episodeTitle: primary.episodeTitle || fallback.episodeTitle || null,
     releaseInfo: primary.releaseInfo || fallback.releaseInfo || null,
     genres: primary.genres?.length ? primary.genres : fallback.genres,
     runtime: primary.runtime || fallback.runtime || null,
