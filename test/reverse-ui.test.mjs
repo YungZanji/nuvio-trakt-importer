@@ -48,7 +48,12 @@ test("reverse workflow has four isolated steps and exact before-after change lis
   assert.match(reverse, /id="export-detail-playback"/);
 
   const source = await transformedAppSource();
-  assert.match(source, /function exportCollectExactChanges\(result\)/);
-  assert.match(source, /renderExportExactChanges\(exportMergeResult\)/);
-  assert.match(source, /Cleared after newer finished state/);
+  assert.match(source, /function exportPopulateChangeList/);
+  assert.match(source, /renderExportExactChanges\(exportCandidates\)/);
+  assert.match(source, /exportExcludedChanges/);
+  assert.match(source, /exportResolveTitles/);
+  assert.match(source, /excluded: exportExcludedChanges/);
+  assert.match(reverse, /id="export-resolve-button"/);
+  assert.match(reverse, /id="export-select-all"/);
+  assert.match(reverse, /id="export-select-none"/);
 });
