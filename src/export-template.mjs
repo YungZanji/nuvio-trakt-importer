@@ -92,7 +92,25 @@ export function patchExportTemplate(source) {
 
           <p class="inline-warning">Nuvio Sync exposes the current watched state and latest timestamp, not a complete replay-event log. If the same movie or episode was rewatched multiple times after your Trakt export, the exporter can preserve the newest known state but cannot reconstruct every missing replay event.</p>
 
+          <div class="export-metadata-tool">
+            <h3>Resolve missing titles and episode names</h3>
+            <p>IMDb IDs such as <code>tt1234567</code> identify titles, not episode names. Check the Trakt archive first; for anything missing, you can resolve only public IDs and season/episode numbers with TMDB or Cinemeta. No watch timestamps, account information or ZIP contents are sent to metadata services.</p>
+            <label for="export-metadata-token">TMDB API Read Access Token (optional, recommended)</label>
+            <input id="export-metadata-token" type="password" autocomplete="off" spellcheck="false" placeholder="TMDB v3 Read Access Token; used once and cleared">
+            <p><a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">Get your TMDB read token</a>. Without a token, Cinemeta is tried for IMDb IDs. You must choose to start the lookup.</p>
+            <button id="export-resolve-button" type="button" class="secondary" disabled>Resolve unidentified titles</button>
+            <p id="export-meta-state" class="substatus" aria-live="polite"></p>
+          </div>
+
           <div id="export-preview" hidden>
+            <div class="export-select-controls">
+              <p><strong>Choose which new changes to include.</strong> Uncheck any addition or update you don't want in the merged ZIP. Your original Trakt data is never deleted by these exclusions.</p>
+              <div class="button-row">
+                <button id="export-select-all" type="button" class="secondary">Include all changes</button>
+                <button id="export-select-none" type="button" class="secondary">Exclude all changes</button>
+              </div>
+              <p id="export-selection-status" class="substatus" aria-live="polite"></p>
+            </div>
             <div class="stat-grid">
               <div><strong id="export-count-watchlist">0</strong><span>Watchlist additions</span></div>
               <div><strong id="export-count-watched">0</strong><span>Newer watched states</span></div>
@@ -107,7 +125,7 @@ export function patchExportTemplate(source) {
 
             <details id="export-change-details" class="export-change-details" open>
               <summary>Show the exact Nuvio → Trakt changes</summary>
-              <p class="export-change-intro">These lists are generated from the actual before/after archive diff, so you can verify the titles, episodes, timestamps, and progress before downloading anything.</p>
+              <p class="export-change-intro">These are proposed edits to the Trakt ZIP. Uncheck any item to leave it out of the download; the totals above update automatically. Unknown titles stay marked with their IMDb/TMDB ID until resolved.</p>
               <div class="export-change-groups">
                 <div class="export-change-group">
                   <h3>Watchlist additions <span id="export-detail-watchlist-count">0</span></h3>
@@ -128,6 +146,7 @@ export function patchExportTemplate(source) {
           </div>
 
           <button id="export-button" type="button" class="import-button" disabled>Download merged Trakt archive</button>
+          <p class="substatus">Only selected additions and updates are written to the ZIP. Unselected changes stay out; source Trakt history stays intact.</p>
           <p class="substatus">No Trakt API key or Trakt login is required. The tool creates a merged Trakt-style ZIP locally in your browser and never uploads the source archive.</p>
         </div>
       </section>
