@@ -452,6 +452,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) 
   let showSummaryChanged = false;
 
   const latestWatched = maxHistoryTimestamp(history, movieSummaries, mediaIndex);
+  const newNuvioFinishes = new Set();
   let watchedAdded = 0;
   let movieWatchedAdded = 0;
   let episodeWatchedAdded = 0;
@@ -468,6 +469,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) 
     targetHistory.push(entry);
     history.push(entry);
     latestWatched.set(identity, watchedAt);
+    newNuvioFinishes.add(identity);
     watchedAdded++;
 
     if (entry.type === "movie") {
@@ -531,7 +533,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) 
 
   for (const [key, existing] of [...playbackByKey]) {
     const watchedAt = latestWatched.get(key) || 0;
-    if (watchedAt > 0 && watchedAt >= parseTimestamp(existing.paused_at)) {
+    if (newNuvioFinishes.has(key) && watchedAt > 0 && watchedAt >= parseTimestamp(existing.paused_at)) {
       const changeId = "finish:" + key;
       changes.playback.push({ id: changeId, entry: existing, previous: existing, action: "clear" });
       if (excluded.has(changeId)) continue;
