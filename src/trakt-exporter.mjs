@@ -504,6 +504,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) 
   let playbackUpdated = 0;
   let playbackRemovedBecauseFinished = 0;
   let playbackSkipped = 0;
+  const protectedPlaybackKeys = new Set();
 
   for (const [index, item] of watchProgress.entries()) {
     const changeId = "progress:" + index;
@@ -520,12 +521,12 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) 
     const existing = playbackByKey.get(key);
     if (!existing) {
       changes.playback.push({ id: changeId, entry: candidate, previous: null, action: "add" });
-      if (excluded.has(changeId)) continue;
+      if (excluded.has(changeId)) { protectedPlaybackKeys.add(key); continue; }
       playbackByKey.set(key, candidate);
       playbackAdded++;
     } else if (pausedAt > parseTimestamp(existing.paused_at)) {
       changes.playback.push({ id: changeId, entry: candidate, previous: existing, action: "update" });
-      if (excluded.has(changeId)) continue;
+      if (excluded.has(changeId)) { protectedPlaybackKeys.add(key); continue; }
       playbackByKey.set(key, candidate);
       playbackUpdated++;
     }
@@ -533,7 +534,7 @@ export function buildMergedTraktExport(textFiles, nuvioData = {}, options = {}) 
 
   for (const [key, existing] of [...playbackByKey]) {
     const watchedAt = latestWatched.get(key) || 0;
-    if (newNuvioFinishes.has(key) && watchedAt > 0 && watchedAt >= parseTimestamp(existing.paused_at)) {
+    if (!protectedPlaybackKeys.has(key) && newNuvioFinishes.has(key) && watchedAt > 0 && watchedAt >= parseTimestamp(existing.paused_at)) {
       const changeId = "finish:" + key;
       changes.playback.push({ id: changeId, entry: existing, previous: existing, action: "clear" });
       if (excluded.has(changeId)) continue;
