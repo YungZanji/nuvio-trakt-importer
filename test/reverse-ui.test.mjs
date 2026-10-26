@@ -109,3 +109,23 @@ test("direct resolver includes Continue Watching episodes without switching to J
   assert.doesNotMatch(source,/Resolve missing episode IDs \(in JSON mode\)/);
   assert.doesNotMatch(source,/Ensure your app's CORS origin is set correctly/);
 });
+
+
+test("changing reviewed selections invalidates previous direct-sync plan and enforces allowlist", async()=>{
+  const source=await transformedAppSource();
+  const start=source.indexOf("function renderExportPreview()");
+  const preview=source.slice(start,source.indexOf("function selectedTraktFormat()",start));
+  assert.match(preview,/traktPreviewRevision\+\+/);
+  assert.match(preview,/traktLivePlan = null/);
+  assert.match(preview,/updateTraktSyncUi\(\)/);
+  const select=source.slice(source.indexOf("function syncCandidatesNow()"),source.indexOf("function excludeUnmatchedTraktPlayback()"));
+  assert.match(select,/selectedChangeIds:approvedIds/);
+  assert.match(select,/exportCandidates/);
+  assert.match(select,/filter\(row=>!exportExcludedChanges\.has\(row\.id\)\)/);
+  const commit=source.slice(source.indexOf("async function commitTraktDirect()"),source.indexOf("function updateExportReadiness()"));
+  assert.match(commit,/revision!==traktPreviewRevision/);
+  assert.match(commit,/onConfirmed:/);
+  assert.match(source,/unsupportedPlayback\.length/);
+  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
+  assert.match(html,/id="trakt-unsupported-list"/);
+});

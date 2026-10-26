@@ -194,6 +194,10 @@ export function patchExportTemplate(source) {
             <div id="trakt-live-plan" hidden>
               <h4>Live Trakt comparison</h4>
               <p id="trakt-plan-counts" aria-live="polite"></p>
+              <div id="trakt-unsupported" hidden>
+                <p class="inline-warning"><strong>Unsupported resume positions (80% or more).</strong> Trakt's pause API rejects these, while stop could mark the title as watched. To avoid accidentally completing unfinished media, direct sync skips these positions at their original percentage. They remain available in the merged ZIP; they are not automatically marked watched.</p>
+                <ul id="trakt-unsupported-list" class="export-unmatched-list"></ul>
+              </div>
               <p class="inline-warning">Trakt's pause API saves the current resume percentage, but it cannot backdate the original Nuvio pause time. Paused progress may not appear in Trakt's Next Up list. This sync does not delete existing Trakt data.</p>
             </div>
           </section>
