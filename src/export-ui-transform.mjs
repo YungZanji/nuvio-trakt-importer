@@ -381,6 +381,16 @@ function renderTraktImportReadiness() {
     const count = exportImportPreview.summary;
     const missing = exportImportPreview.unresolved;
     const missingEpisodes = missing.filter((row) => row.reason === "Episode-specific ID required");
+    const unmatchedPanel = $("export-import-unmatched");
+    unmatchedPanel.hidden = !missing.length;
+    const unmatchedList = $("export-import-unmatched-list");
+    unmatchedList.replaceChildren();
+    for (const record of missing) {
+      const li = document.createElement("li");
+      const label = record.title + (record.season == null ? "" : " · S" + String(record.season).padStart(2, "0") + "E" + String(record.episode).padStart(2, "0"));
+      li.textContent = label + " — " + record.reason;
+      unmatchedList.append(li);
+    }
     $("export-episode-status").textContent =
       count.history + " watched events (" + count.episodes + " individual episodes), " +
       count.watchlist + " watchlist entries ready for JSON. " +
