@@ -145,9 +145,34 @@ export function patchExportTemplate(source) {
             <p id="export-warnings" class="inline-warning" hidden></p>
           </div>
 
-          <button id="export-button" type="button" class="import-button" disabled>Download merged Trakt archive</button>
+          <div class="export-format-chooser" role="group" aria-labelledby="export-output-heading">
+            <h3 id="export-output-heading">Choose final file format</h3>
+            <label class="export-format-card">
+              <input type="radio" name="reverse-file-format" value="archive" checked>
+              <span><strong>Trakt backup archive (.zip)</strong><small>Preserve the original full Trakt export plus only the Nuvio changes you approved. This is a backup, not a direct Trakt website import file.</small></span>
+            </label>
+            <label class="export-format-card">
+              <input type="radio" name="reverse-file-format" value="import">
+              <span><strong>Trakt website import (.json)</strong><small>Generate the flat JSON array accepted by Trakt → Settings → Data → Import → JSON File.</small></span>
+            </label>
+            <div id="export-import-options" hidden>
+              <label class="export-format-card export-scope">
+                <input id="export-import-full" type="checkbox">
+                <span><strong>Include all original Trakt history too</strong><small>Off by default: only the selected *new* Nuvio watches and watchlist additions are imported, avoiding re-importing thousands of historical plays.</small></span>
+              </label>
+              <div class="export-episode-tool">
+                <p><strong>Episode-specific IDs are required.</strong> Trakt cannot match a watched episode reliably from the parent show's IMDb ID alone. The tool reuses episode IDs in your old Trakt archive; for new episodes, supply your TMDB token above and choose Resolve missing episode IDs. No watch history or login information is sent to TMDB.</p>
+                <button id="export-resolve-episodes" type="button" class="secondary" disabled>Resolve missing episode IDs</button>
+                <button id="export-skip-unmatched" type="button" class="secondary" hidden>Exclude unresolved new entries</button>
+                <p id="export-episode-status" class="substatus" aria-live="polite"></p>
+                <p class="inline-warning">Trakt's JSON import format supports watch history and watchlist dates, but does not support Continue Watching percentages. Use the ZIP format to preserve resume positions.</p>
+              </div>
+            </div>
+          </div>
+
+          <button id="export-button" type="button" class="import-button" disabled>Download merged Trakt archive (.zip)</button>
           <p class="substatus">Only selected additions and updates are written to the ZIP. Unselected changes stay out; source Trakt history stays intact.</p>
-          <p class="substatus">No Trakt API key or Trakt login is required. The tool creates a merged Trakt-style ZIP locally in your browser and never uploads the source archive.</p>
+          <p class="substatus">No Trakt API key or Trakt login is required. The files are generated entirely in your browser. A TMDB token is needed only for episode-ID lookups that cannot be resolved from the old Trakt archive.</p>
         </div>
       </section>
     </div>
