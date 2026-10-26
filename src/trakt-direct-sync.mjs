@@ -1,5 +1,5 @@
 // One-time browser-only Trakt migration. No passwords, secrets, or account tokens are persisted.
-import { buildTraktImportJson } from "./trakt-import-json.mjs";
+import { buildTraktImportJson, buildTraktEpisodeIdIndex } from "./trakt-import-json.mjs";
 
 const API_BASE = "https://api.trakt.tv";
 const AUTH_BASE = "https://auth.trakt.tv";
@@ -39,7 +39,8 @@ function episodePlaybackIds(row, episodeIds) {
 
 /** Builds requests from the exact selected Nuvio changes, never from all original Trakt records. */
 export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),episodeIds=new Map()}={}) {
-  const converted=buildTraktImportJson(textFiles,merged,{scope:"new",excluded,episodeIds});
+  const effectiveEpisodeIds=new Map([...buildTraktEpisodeIdIndex(textFiles),...episodeIds]);
+  const converted=buildTraktImportJson(textFiles,merged,{scope:"new",excluded,episodeIds:effectiveEpisodeIds});
   const watched=sortDedupe(converted.rows.filter(r=>r.watched_at));
   const watchlist=sortDedupe(converted.rows.filter(r=>r.watchlisted_at));
   const playback=[];
@@ -49,10 +50,15 @@ export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),
     const entry=change.entry, progress=Number(entry?.progress);
     if(!(progress>0&&progress<100)||!iso(entry?.paused_at))continue;
     const isEpisode=entry.type==="episode";
-    const ids=isEpisode?episodePlaybackIds(entry,episodeIds):entry?.movie?.ids;
+    const ids=isEpisode?episodePlaybackIds(entry,effectiveEpisodeIds):entry?.movie?.ids;
     if(!ids || !mediaKey(isEpisode?"episode":"movie",ids).length){
-      unresolved.push({changeId:change.id,kind:"playback",reason:"Episode/movie ID required for pause sync",
-        title:entry?.show?.title||entry?.movie?.title||"Unknown",season:entry?.episode?.season,episode:entry?.episode?.number});
+      unresolved.push({
+        changeId:change.id,kind:"playback",
+        reason:isEpisode?"Episode-specific ID required for pause sync":"Movie ID required for pause sync",
+        title:entry?.show?.title||entry?.movie?.title||"Unknown",
+        showIds:isEpisode?(entry?.show?.ids||null):null,
+        season:entry?.episode?.season??null,episode:entry?.episode?.number??null,
+      });
       continue;
     }
     playback.push({type:isEpisode?"episode":"movie",ids,progress,paused_at:iso(entry.paused_at),changeId:change.id});

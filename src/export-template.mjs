@@ -177,7 +177,7 @@ export function patchExportTemplate(source) {
 
           <section class="trakt-direct-sync" id="trakt-direct-sync" aria-labelledby="trakt-direct-title">
             <h3 id="trakt-direct-title">Or sync selected Nuvio changes directly to Trakt</h3>
-            <p>Send only the selected new watched events and watchlist additions, plus unfinished playback positions, to your Trakt account. Nothing is written until you review the live comparison and confirm.</p>
+            <p>Send only the selected new watched events and watchlist additions, plus unfinished playback positions, to your Trakt account. Nothing is written until you review the live comparison and confirm. If a few resume positions cannot be matched, you can explicitly exclude only those positions and sync the remaining data.</p>
             <p class="substatus">Create a Trakt developer application once, then register the callback URL <code>https://yungzanji.github.io/nuvio-trakt-importer/</code> and CORS origin <code>https://yungzanji.github.io</code>. Use only its <strong>Client ID</strong>; never provide a Client Secret.</p>
             <label for="trakt-client-id">Your Trakt application Client ID</label>
             <input id="trakt-client-id" type="text" spellcheck="false" autocomplete="off" placeholder="Paste Trakt Client ID">
@@ -185,6 +185,7 @@ export function patchExportTemplate(source) {
             <div class="trakt-direct-actions">
               <button id="trakt-authorize" class="secondary" type="button">Authorize Trakt (PKCE)</button>
               <button id="trakt-resolve-ids" class="secondary" type="button" disabled>Resolve missing episode IDs</button>
+              <button id="trakt-skip-unmatched-playback" class="secondary" type="button" disabled>Exclude unmatched playback (optional)</button>
               <button id="trakt-check" class="secondary" type="button" disabled>Compare with live Trakt account</button>
               <button id="trakt-commit" type="button" disabled>Confirm and sync to Trakt</button>
               <button id="trakt-disconnect" class="secondary" type="button" disabled>Disconnect</button>

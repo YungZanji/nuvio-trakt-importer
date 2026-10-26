@@ -94,3 +94,18 @@ test("direct sync has independent Trakt authorization, live review and explicit 
   assert.match(csp,/https:\/\/auth\.trakt\.tv/);
   assert.match(csp,/https:\/\/api\.trakt\.tv/);
 });
+
+
+test("direct resolver includes Continue Watching episodes without switching to JSON mode", async()=>{
+  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
+  assert.match(html,/id="trakt-resolve-ids"/);
+  assert.match(html,/id="trakt-skip-unmatched-playback"/);
+  const source=await transformedAppSource();
+  assert.match(source,/const syncMissing = syncCandidatesNow\(\)\.unresolved/);
+  assert.match(source,/row.reason\?\.startsWith\("Episode-specific ID required"\)/);
+  assert.match(source,/\$\("trakt-resolve-ids"\)\?\.addEventListener\("click", resolveMissingTraktEpisodes\)/);
+  assert.match(source,/excludeUnmatchedTraktPlayback/);
+  assert.match(source,/error\.code = "MISSING_IDS"/);
+  assert.doesNotMatch(source,/Resolve missing episode IDs \(in JSON mode\)/);
+  assert.doesNotMatch(source,/Ensure your app's CORS origin is set correctly/);
+});

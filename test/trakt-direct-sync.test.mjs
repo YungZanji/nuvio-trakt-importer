@@ -136,3 +136,49 @@ test("newer live Trakt watch prevents re-adding stale Nuvio history or resurrect
   assert.equal(plan.playback.length,0);
   assert.equal(plan.watchlist.length,1);
 });
+
+
+test("pause-only episode automatically reuses the episode ID found in the original Trakt history", () => {
+  const show={title:"Agatha All Along",ids:{imdb:"tt15571732",tmdb:138501}};
+  const source=new Map([
+    ["watched-history-1.json",JSON.stringify([
+      {type:"episode",show,episode:{season:1,number:5,ids:{trakt:45005,tmdb:222005}},
+       watched_at:"2024-10-01T11:00:00Z"},
+    ])],
+    ["lists-watchlist.json","[]"],
+  ]);
+  const candidate=buildTraktSyncCandidates(source,{updates:new Map(),changes:{
+    history:[],watchlist:[],
+    playback:[{id:"progress:0",action:"add",entry:{
+      type:"episode",show,episode:{season:1,number:5},
+      progress:47.5,paused_at:"2026-10-20T11:00:00Z"
+    }}],
+  }});
+  assert.equal(candidate.unresolved.length,0);
+  assert.equal(candidate.playback.length,1);
+  assert.deepEqual(candidate.playback[0].ids,{trakt:45005});
+  assert.equal(candidate.playback[0].progress,47.5);
+});
+
+test("pause-only episodes are included in ID resolution rather than silently removed", () => {
+  const show={title:"Agatha All Along",ids:{imdb:"tt15571732",tmdb:138501}};
+  const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const merged={updates:new Map(),changes:{history:[],watchlist:[],playback:[{
+    id:"progress:17",action:"add",entry:{type:"episode",show,episode:{season:1,number:6},progress:63,
+      paused_at:"2026-10-20T12:00:00Z"},
+  }]}};
+  const unresolved=buildTraktSyncCandidates(source,merged);
+  assert.equal(unresolved.playback.length,0);
+  assert.equal(unresolved.unresolved.length,1);
+  assert.equal(unresolved.unresolved[0].kind,"playback");
+  assert.equal(unresolved.unresolved[0].reason,"Episode-specific ID required for pause sync");
+  assert.deepEqual(unresolved.unresolved[0].showIds,show.ids);
+  assert.equal(unresolved.unresolved[0].changeId,"progress:17");
+  const episodeIds=new Map([["tmdb:138501|s1e6",{tmdb:13579024}]]);
+  const resolved=buildTraktSyncCandidates(source,merged,{episodeIds});
+  assert.equal(resolved.unresolved.length,0);
+  assert.equal(resolved.playback[0].ids.tmdb,13579024);
+  const omitted=buildTraktSyncCandidates(source,merged,{excluded:new Set(["progress:17"])});
+  assert.equal(omitted.playback.length,0);
+  assert.equal(omitted.unresolved.length,0);
+});
