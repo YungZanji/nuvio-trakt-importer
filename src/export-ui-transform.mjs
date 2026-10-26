@@ -24,6 +24,10 @@ let traktConnection = null;
 let traktAuthAttempt = null;
 let traktLivePlan = null;
 let traktBusy = false;
+let traktPreviewRevision = 0;
+// Retain only successful Trakt acknowledgements in memory so an API error
+// cannot immediately re-offer the same confirmed 139 watched events.
+let traktConfirmedLedger = { history:new Set(), watchlist:new Set(), playback:new Set() };
 
 const state = {
 `,
@@ -329,6 +333,11 @@ async function onExportZipSelected(event) {
 }
 
 function renderExportPreview() {
+  // A checkbox, profile or metadata change must invalidate any earlier live
+  // write plan. This was the cause of deselected items being syncable.
+  traktPreviewRevision++;
+  traktLivePlan = null;
+  updateTraktSyncUi();
   const panel = $("export-preview");
   if (!panel) return;
   if (!exportArchiveTextFiles || !state.remoteBefore) {
@@ -601,6 +610,7 @@ async function receiveTraktAuth(event) {
     const token=await exchangeTraktCode({code:event.data.code,verifier:pending.verifier,
       clientId:pending.clientId,redirectUri:pending.redirectUri});
     traktConnection={clientId:pending.clientId,...token};
+    traktConfirmedLedger={history:new Set(),watchlist:new Set(),playback:new Set()};
     traktLivePlan=null;
     $("trakt-connect-status").textContent="Trakt authorized for this browser tab. Compare with live Trakt before syncing.";
   } catch(error) {
@@ -614,6 +624,7 @@ async function receiveTraktAuth(event) {
 }
 
 function disconnectTraktDirect() {
+  traktConfirmedLedger={history:new Set(),watchlist:new Set(),playback:new Set()};
   traktConnection=null;
   traktAuthAttempt=null;
   traktLivePlan=null;
@@ -623,9 +634,14 @@ function disconnectTraktDirect() {
 }
 
 function syncCandidatesNow() {
-  if(!exportArchiveTextFiles||!exportMergeResult)throw Error("Read Nuvio data and build the merged preview first.");
-  return buildTraktSyncCandidates(exportArchiveTextFiles,exportMergeResult,{
-    excluded:exportExcludedChanges,episodeIds:exportEpisodeIds,
+  if(!exportArchiveTextFiles||!exportMergeResult||!exportCandidates)
+    throw Error("Read Nuvio data and build the merged preview first.");
+  const approvedIds=new Set(exportAllCandidateRows()
+    .filter(row=>!exportExcludedChanges.has(row.id)).map(row=>row.id));
+  // Use exactly the proposed changes visible in the review checklist.
+  // Never reuse a previously merged/selected plan as the input source.
+  return buildTraktSyncCandidates(exportArchiveTextFiles,exportCandidates,{
+    excluded:exportExcludedChanges,episodeIds:exportEpisodeIds,selectedChangeIds:approvedIds,
   });
 }
 
@@ -661,15 +677,28 @@ async function compareTraktDirect() {
     const api=makeTraktApi(traktConnection);
     const {body:profile}=await api("/users/settings");
     const user=profile?.user?.username || profile?.user?.name || "your Trakt account";
-    const plan=await planTraktSync(api,candidates);
-    traktLivePlan={plan,user,sourceRevision:exportMergeResult};
+    const comparisonRevision=traktPreviewRevision;
+    const plan=await planTraktSync(api,candidates,{acknowledged:traktConfirmedLedger});
+    if(comparisonRevision!==traktPreviewRevision)
+      throw Error("The review selections changed during comparison. Recompare the selected changes.");
+    traktLivePlan={plan,user,revision:comparisonRevision};
     const counts=plan;
     $("trakt-plan-counts").textContent="Trakt account: "+user+
       " · "+counts.history.length+" new watched events, "+
       counts.watchlist.length+" new watchlist titles, "+
       counts.playback.length+" newer playback positions. Already on Trakt: "+
       counts.existingSkipped.history+" watches, "+counts.existingSkipped.watchlist+
-      " watchlist entries, "+counts.existingSkipped.playback+" resume positions.";
+      " watchlist entries, "+counts.existingSkipped.playback+" resume positions. "+
+      counts.unsupportedPlayback.length+" selected resume positions at ≥80% cannot be restored accurately using Trakt's pause API and will be skipped.";
+    const omittedList=$("trakt-unsupported-list");
+    omittedList.replaceChildren();
+    for(const item of counts.unsupportedPlayback){
+      const li=document.createElement("li");
+      li.textContent=item.type+" · "+item.progress.toFixed(2)+"% · "+item.changeId+
+        " (preserved in ZIP, not marked watched)";
+      omittedList.append(li);
+    }
+    $("trakt-unsupported").hidden=!counts.unsupportedPlayback.length;
     $("trakt-connect-status").textContent="Live comparison complete. Review the counts and confirm separately before any changes.";
   } catch(error) {
     $("trakt-connect-status").textContent="Live Trakt comparison failed: "+(error.message||error)+
@@ -684,7 +713,13 @@ async function compareTraktDirect() {
 
 async function commitTraktDirect() {
   if (traktBusy || !traktConnection || !traktLivePlan) return;
-  const {plan,user}=traktLivePlan;
+  const {plan,user,revision}=traktLivePlan;
+  if(revision!==traktPreviewRevision){
+    traktLivePlan=null;
+    updateTraktSyncUi();
+    $("trakt-connect-status").textContent="Your selected changes were modified after comparison. Compare again before syncing.";
+    return;
+  }
   const total=plan.history.length+plan.watchlist.length+plan.playback.length;
   if(!total){
     $("trakt-connect-status").textContent="Nothing new to sync: Trakt already has the selected data.";
@@ -692,7 +727,8 @@ async function commitTraktDirect() {
   }
   const approved=window.confirm("Sync to "+user+"? Add "+plan.history.length+
     " watched events, "+plan.watchlist.length+" watchlist titles and "+plan.playback.length+
-    " resume positions. No Trakt data will be deleted. This may not be reversible.");
+    " resume positions. "+plan.unsupportedPlayback.length+
+    " resume positions at 80% or above will NOT be synced or marked watched, but remain in your ZIP backup. No Trakt data will be deleted. This may not be reversible.");
   if (!approved) return;
   traktBusy=true;
   traktLivePlan=null; // a plan is consumed once, even on partial error; recompare before retrying
@@ -700,7 +736,12 @@ async function commitTraktDirect() {
   let last={history:0,watchlist:0,playback:0};
   try {
     const api=makeTraktApi(traktConnection);
-    const report=await executeTraktSync(api,plan,{onProgress:progress=>{
+    const report=await executeTraktSync(api,plan,{onConfirmed:(kind,group)=>{
+      for(const row of group){
+        const key=kind==="playback"?(row.changeId+"|"+row.progress):JSON.stringify(row);
+        traktConfirmedLedger[kind].add(key);
+      }
+    },onProgress:progress=>{
       last=progress;
       $("trakt-connect-status").textContent="Trakt sync in progress: "+
         last.history+" watches, "+last.watchlist+" watchlist, "+last.playback+" playback positions confirmed.";
