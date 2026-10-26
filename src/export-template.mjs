@@ -165,6 +165,11 @@ export function patchExportTemplate(source) {
                 <button id="export-resolve-episodes" type="button" class="secondary" disabled>Resolve missing episode IDs</button>
                 <button id="export-skip-unmatched" type="button" class="secondary" hidden>Exclude unresolved new entries</button>
                 <p id="export-episode-status" class="substatus" aria-live="polite"></p>
+                <details id="export-import-unmatched" hidden>
+                  <summary>Review unmatched import entries</summary>
+                  <p class="substatus">These records will not be silently skipped or converted into whole-show watches. Resolve valid episode IDs or exclude the individual entries in the preview.</p>
+                  <ul id="export-import-unmatched-list" class="export-unmatched-list"></ul>
+                </details>
                 <p class="inline-warning">Trakt's JSON import format supports watch history and watchlist dates, but does not support Continue Watching percentages. Use the ZIP format to preserve resume positions.</p>
               </div>
             </div>
