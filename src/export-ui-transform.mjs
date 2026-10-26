@@ -486,7 +486,9 @@ function downloadTraktWebImport() {
 function updateExportReadiness() {
   const button = $("export-button");
   if (!button) return;
-  button.disabled = exportLookupInFlight || !(exportArchiveFiles && exportArchiveTextFiles && state.token && state.remoteBefore && state.selectedProfile && exportMergeResult);
+  const ready = Boolean(exportArchiveFiles && exportArchiveTextFiles && state.token && state.remoteBefore && state.selectedProfile && exportMergeResult);
+  const jsonReady = selectedTraktFormat() !== "import" || Boolean(exportImportPreview && exportImportPreview.unresolved.length === 0 && exportImportPreview.rows.length);
+  button.disabled = exportLookupInFlight || exportEpisodeLookupInFlight || !ready || !jsonReady;
   if ($("export-resolve-button")) $("export-resolve-button").disabled = exportLookupInFlight || !exportCandidates;
 }
 
@@ -503,6 +505,10 @@ function downloadBytes(filename, bytes, type = "application/zip") {
 }
 
 function downloadMergedTraktArchive() {
+  if (selectedTraktFormat() === "import") {
+    try { downloadTraktWebImport(); } catch (error) { setStatus("Import JSON export stopped: " + (error?.message || error), "error"); }
+    return;
+  }
   if (!exportArchiveFiles || !exportArchiveTextFiles || !state.remoteBefore) return;
   const button = $("export-button");
   setBusy(button, true, "Building merged archive…");
@@ -587,6 +593,12 @@ $("tool-export-tab")?.addEventListener("click", () => setToolMode("export"));
 $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
+for (const input of document.querySelectorAll('input[name="reverse-file-format"]')) {
+  input.addEventListener("change", () => { renderTraktImportReadiness(); updateExportReadiness(); });
+}
+$("export-import-full")?.addEventListener("change", () => { renderTraktImportReadiness(); updateExportReadiness(); });
+$("export-resolve-episodes")?.addEventListener("click", resolveMissingTraktEpisodes);
+$("export-skip-unmatched")?.addEventListener("click", skipUnmatchedTraktChanges);
 $("export-resolve-button")?.addEventListener("click", exportResolveTitles);
 $("export-select-all")?.addEventListener("click", () => { exportExcludedChanges.clear(); renderExportPreview(); });
 $("export-select-none")?.addEventListener("click", () => { for (const row of exportAllCandidateRows()) exportExcludedChanges.add(row.id); renderExportPreview(); });
@@ -596,6 +608,7 @@ $("profile-select")?.addEventListener("change", () => {
     state.selectedProfile = null;
     exportExcludedChanges.clear();
     exportMetadata.clear();
+    exportEpisodeIds.clear();
     exportCandidates = null;
     $("remote-summary").hidden = true;
     setStatus("Profile changed. Click Read Nuvio data to load the selected profile.");
