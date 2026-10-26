@@ -4,7 +4,7 @@ function replaceRequired(source, needle, replacement, label) {
 }
 
 export function patchExportUiSource(source) {
-  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\n${source}`;
+  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbEpisodeId } from "./metadata-provider.mjs";\n${source}`;
 
   patched = replaceRequired(
     patched,
@@ -17,6 +17,9 @@ let exportCandidates = null;
 let exportExcludedChanges = new Set();
 let exportMetadata = new Map();
 let exportLookupInFlight = false;
+let exportEpisodeIds = new Map();
+let exportImportPreview = null;
+let exportEpisodeLookupInFlight = false;
 
 const state = {
 `,
@@ -301,6 +304,7 @@ async function onExportZipSelected(event) {
     exportCandidates = null;
     exportExcludedChanges.clear();
     exportMetadata.clear();
+    exportEpisodeIds.clear();
     renderExportSourceSummary();
     renderExportPreview();
     updateExportReadiness();
@@ -312,6 +316,7 @@ async function onExportZipSelected(event) {
     exportCandidates = null;
     exportExcludedChanges.clear();
     exportMetadata.clear();
+    exportEpisodeIds.clear();
     updateExportReadiness();
     setStatus("Could not read this Trakt ZIP: " + (error.message || error), "error");
   }
@@ -344,9 +349,12 @@ function renderExportPreview() {
     warning.textContent = exportMergeResult.warnings.join(" ");
     warning.hidden = exportMergeResult.warnings.length === 0;
     panel.hidden = false;
+    renderTraktImportReadiness();
+    updateExportReadiness();
   } catch (error) {
     exportMergeResult = null;
     exportCandidates = null;
+    exportImportPreview = null;
     panel.hidden = false;
     $("export-warnings").hidden = false;
     $("export-warnings").textContent = "The merge preview could not be built safely: " + (error.message || error);
