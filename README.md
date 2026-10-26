@@ -99,6 +99,27 @@ After reviewing individual Nuvio changes, pick one:
 
 **Validation:** Preview the JSON import on Trakt before confirming it. Existing Trakt watch history may contain the original records; leave "include original history" off to avoid importing those events again.
 
+## Direct Trakt sync (OAuth PKCE)
+
+In addition to downloading Trakt backup ZIPs and Trakt-compatible JSON, the **Nuvio → Trakt** workflow offers a **direct Trakt sync** option. It can send user-approved, newly watched Nuvio movies/episodes, Nuvio Library items (to Trakt Watchlist), and unfinished playback percentages (using Trakt's pause-scrobble endpoint).
+
+This option is a **one-time, explicitly confirmed migration**, not automatic background synchronization.
+
+1. Register a Trakt API app at [Trakt My Apps](https://app.trakt.tv/oauth/applications). Set its **redirect URI** to `https://yungzanji.github.io/nuvio-trakt-importer/` and its **JavaScript/CORS origin** to `https://yungzanji.github.io`.
+2. Enter its **Client ID** in Step 4; **never enter a Client Secret**. Click **Authorize Trakt (PKCE)** and grant access in the popup. Keep the main tab open.
+3. Upload the original Trakt ZIP, sign into Nuvio and review individual changes. Resolve unknown **episode IDs** using your TMDB Read Access Token as needed.
+4. Click **Compare with live Trakt account**. The tool reads current watch history, watchlist, and playback and identifies only missing/newer items.
+5. Click **Confirm and sync to Trakt**. No writes occur before this explicit confirmation. The tool never calls Trakt deletion endpoints.
+
+New-only sync does not re-upload the full original Trakt history. Pause positions use Trakt's `/scrobble/pause` API; progress percentages are preserved, but **Trakt assigns a fresh paused timestamp** rather than copying Nuvio's original pause time. The ZIP retains the original timestamp.
+
+**Privacy:** Trakt OAuth PKCE has no Client Secret; Client ID and access token are held only in the active page's memory, not cookies, persistent storage, or a backend. Trakt/Nuvio requests are made directly from the browser. An app-specific CORS origin must be configured at Trakt. Disconnect or close the tab to discard the Trakt token.
+
+**Failures:** Rate limits, app permission restrictions, and unmatched IDs can prevent migration. The tool reports confirmed writes, stops on errors, and requires a fresh comparison before retrying. This functionality passes mocked API tests, but it has not yet been verified by a real OAuth session on the owner's Trakt account.
+
+*This application uses Trakt but is not endorsed or certified by Trakt.*
+
+---
 ## Reverse merge rules
 
 The original Trakt export remains the historical base.
