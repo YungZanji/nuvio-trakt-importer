@@ -99,6 +99,14 @@ After reviewing individual Nuvio changes, pick one:
 
 **Validation:** Preview the JSON import on Trakt before confirming it. Existing Trakt watch history may contain the original records; leave "include original history" off to avoid importing those events again.
 
+### Direct-sync safety and retry behavior
+
+- **Selection applies to sync:** Only checked review items can be sent to Trakt. Changing checkboxes invalidates the live plan; always re-run **Compare with live Trakt account** before confirming. The boxes are locked during in-flight writes.
+- **Watch timestamps:** Trakt normalizes `watched_at` to the start of each minute. The live comparison uses that same precision, including the `start_at` query boundary. Without this, successful writes can be incorrectly shown again in the next comparison.
+- **Previously confirmed batches:** When Trakt acknowledges a complete batch, its records are remembered in the current browser tab so an immediate retry does not re-send them if live reads lag. On reload, the live Trakt API comparison is still authoritative.
+- **Unfinished progress ≥80%:** Trakt currently rejects a pause at high completion percentages with a 422 `Use stop to scrobble`. Calling `stop` would mark it watched; this migration deliberately **does not** silently convert it. Such selections are shown as unsupported and **skipped in direct sync**, while the original percentage and pause timestamp remain available in the merged ZIP.
+- **Rate limits:** Authenticated writes are spaced to respect the Standard API limit of one write per second. If an error occurs, the tool reports confirmed counts, stops immediately, and requires a new comparison; it never blindly replays a failed batch.
+
 ## Direct Trakt sync (OAuth PKCE)
 
 In addition to downloading Trakt backup ZIPs and Trakt-compatible JSON, the **Nuvio → Trakt** workflow offers a **direct Trakt sync** option. It can send user-approved, newly watched Nuvio movies/episodes, Nuvio Library items (to Trakt Watchlist), and unfinished playback percentages (using Trakt's pause-scrobble endpoint).
