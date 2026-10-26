@@ -86,6 +86,19 @@ It requires:
 
 No Trakt API key, Trakt OAuth login, or Trakt application credentials are required to generate the merged archive.
 
+### Choose the download format
+
+After reviewing individual Nuvio changes, pick one:
+
+- **Trakt backup archive (.zip):** preserves the complete original Trakt backup, plus selected newer Nuvio watchlist, history and Continue Watching updates. **Do not upload this to Trakt's JSON File importer**; the nested backup format is not the website import schema.
+- **Trakt website import (.json):** a flat JSON array using `imdb_id`, `tmdb_id`, `trakt_id`, or `tvdb_id`, together with `type`, `watched_at`, and `watchlisted_at`. Upload it under **Trakt → Settings → Data → Import → JSON File**. By default it contains **only new selected Nuvio history and watchlist entries**, avoiding the need to re-import thousands of watches already in Trakt. Check **Include all original Trakt history too** if migrating to an empty Trakt account.
+
+**Episode matching safety:** Trakt needs a real **episode-level** identifier for `type: "episode"`. The exporter first reuses episode IDs from your original Trakt archive. If some new episodes have only the parent show ID, choose JSON mode, enter your TMDB Read Access Token and click **Resolve missing episode IDs**. The browser requests public show/season metadata directly from TMDB, reuses season results, and clears the token; it never sends your watch history or login details. Unmatched episodes block downloading an incomplete JSON file unless you explicitly exclude those changes.
+
+**Playback limitation:** Trakt's website JSON import does not support Continue Watching positions/percentages. The ZIP preserves those positions; the JSON file imports watch history and watchlist dates only. Exact replay events are limited to what Nuvio actually retains.
+
+**Validation:** Preview the JSON import on Trakt before confirming it. Existing Trakt watch history may contain the original records; leave "include original history" off to avoid importing those events again.
+
 ## Reverse merge rules
 
 The original Trakt export remains the historical base.

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isMetaHubUrl, resolveMetadata } from "../src/metadata-provider.mjs";
+import { isMetaHubUrl, resolveMetadata, resolveTmdbSeasonEpisodeIds } from "../src/metadata-provider.mjs";
 
 function jsonResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -42,4 +42,38 @@ test("Cinemeta fallback keeps runtime but strips MetaHub artwork", async () => {
   assert.equal(meta.background, null);
   assert.equal(meta.runtime, "45 min");
   assert.equal(isMetaHubUrl("https://images.metahub.space/x"), true);
+});
+
+
+test("batch episode resolver looks up the show and resolves true TMDB episode IDs", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({url,options});
+    if (url.includes("/find/tt7441658")) return jsonResponse({tv_results:[{id:73223}]});
+    if (url.includes("/tv/73223/season/1?")) return jsonResponse({
+      episodes:[
+        {id:7000001, season_number:1, episode_number:1, name:"Asta and Yuno"},
+        {id:7000002, season_number:1, episode_number:2, name:"The Boys' Promise"},
+        {id:555, season_number:2, episode_number:1, name:"Wrong season"},
+      ]
+    });
+    throw new Error("Unexpected metadata URL " + url);
+  };
+  const data=await resolveTmdbSeasonEpisodeIds({content_id:"tt7441658",season:1,content_type:"series"},{
+    tmdbReadAccessToken:"private-token",fetchImpl
+  });
+  assert.equal(data.showTmdbId,73223);
+  assert.deepEqual(data.episodes.map(x=>x.ids.tmdb),[7000001,7000002]);
+  assert.equal(data.episodes[0].episodeTitle,"Asta and Yuno");
+  assert.equal(calls.length,2);
+  assert.equal(calls.some(x=>x.url.includes("watched_at")),false);
+  assert.equal(calls.every(x=>x.options.headers.Authorization==="Bearer private-token"),true);
+});
+
+test("season resolver returns null instead of inventing unmatched episodes", async()=>{
+  const fetchImpl=async()=>jsonResponse({tv_results:[]});
+  const data=await resolveTmdbSeasonEpisodeIds({content_id:"tt1234567",season:1,content_type:"series"},{
+    tmdbReadAccessToken:"token",fetchImpl
+  });
+  assert.equal(data,null);
 });

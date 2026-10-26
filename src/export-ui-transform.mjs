@@ -4,7 +4,7 @@ function replaceRequired(source, needle, replacement, label) {
 }
 
 export function patchExportUiSource(source) {
-  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\n${source}`;
+  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbSeasonEpisodeIds } from "./metadata-provider.mjs";\n${source}`;
 
   patched = replaceRequired(
     patched,
@@ -17,6 +17,9 @@ let exportCandidates = null;
 let exportExcludedChanges = new Set();
 let exportMetadata = new Map();
 let exportLookupInFlight = false;
+let exportEpisodeIds = new Map();
+let exportImportPreview = null;
+let exportEpisodeLookupInFlight = false;
 
 const state = {
 `,
@@ -301,6 +304,7 @@ async function onExportZipSelected(event) {
     exportCandidates = null;
     exportExcludedChanges.clear();
     exportMetadata.clear();
+    exportEpisodeIds.clear();
     renderExportSourceSummary();
     renderExportPreview();
     updateExportReadiness();
@@ -312,6 +316,7 @@ async function onExportZipSelected(event) {
     exportCandidates = null;
     exportExcludedChanges.clear();
     exportMetadata.clear();
+    exportEpisodeIds.clear();
     updateExportReadiness();
     setStatus("Could not read this Trakt ZIP: " + (error.message || error), "error");
   }
@@ -344,19 +349,169 @@ function renderExportPreview() {
     warning.textContent = exportMergeResult.warnings.join(" ");
     warning.hidden = exportMergeResult.warnings.length === 0;
     panel.hidden = false;
+    renderTraktImportReadiness();
+    updateExportReadiness();
   } catch (error) {
     exportMergeResult = null;
     exportCandidates = null;
+    exportImportPreview = null;
     panel.hidden = false;
     $("export-warnings").hidden = false;
     $("export-warnings").textContent = "The merge preview could not be built safely: " + (error.message || error);
   }
 }
 
+function selectedTraktFormat() {
+  return document.querySelector('input[name="reverse-file-format"]:checked')?.value === "import" ? "import" : "archive";
+}
+
+function renderTraktImportReadiness() {
+  const isImport = selectedTraktFormat() === "import";
+  $("export-import-options").hidden = !isImport;
+  $("export-button").textContent = isImport ? "Download Trakt import JSON (.json)" : "Download merged Trakt archive (.zip)";
+  if (!isImport || !exportMergeResult || !exportArchiveTextFiles) {
+    exportImportPreview = null;
+    return;
+  }
+  try {
+    const scope = $("export-import-full").checked ? "all" : "new";
+    exportImportPreview = buildTraktImportJson(exportArchiveTextFiles, exportMergeResult, {
+      scope, excluded: exportExcludedChanges, episodeIds: exportEpisodeIds,
+    });
+    const count = exportImportPreview.summary;
+    const missing = exportImportPreview.unresolved;
+    const missingEpisodes = missing.filter((row) => row.reason === "Episode-specific ID required");
+    const unmatchedPanel = $("export-import-unmatched");
+    unmatchedPanel.hidden = !missing.length;
+    const unmatchedList = $("export-import-unmatched-list");
+    unmatchedList.replaceChildren();
+    for (const record of missing) {
+      const li = document.createElement("li");
+      const label = record.title + (record.season == null ? "" : " · S" + String(record.season).padStart(2, "0") + "E" + String(record.episode).padStart(2, "0"));
+      li.textContent = label + " — " + record.reason;
+      unmatchedList.append(li);
+    }
+    $("export-episode-status").textContent =
+      count.history + " watched events (" + count.episodes + " individual episodes), " +
+      count.watchlist + " watchlist entries ready for JSON. " +
+      (missing.length ? missing.length + " unmatched, including " + missingEpisodes.length +
+        " episodes. Resolve or exclude them before downloading." : "All IDs and dates are valid.");
+    $("export-resolve-episodes").disabled = exportEpisodeLookupInFlight || !missingEpisodes.length;
+    const skip = $("export-skip-unmatched");
+    skip.hidden = !missing.length || scope === "all" || !missing.some((item) => item.changeId);
+    skip.disabled = exportEpisodeLookupInFlight;
+  } catch (error) {
+    exportImportPreview = null;
+    $("export-episode-status").textContent = "Cannot validate Trakt import: " + (error.message || error);
+    $("export-resolve-episodes").disabled = true;
+    $("export-skip-unmatched").hidden = true;
+  }
+}
+
+async function resolveMissingTraktEpisodes() {
+  if (exportEpisodeLookupInFlight || !exportImportPreview) return;
+  const field = $("export-metadata-token");
+  let token = String(field?.value || "").trim();
+  if (field) field.value = "";
+  if (!token) {
+    $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above, then click Resolve missing episode IDs.";
+    return;
+  }
+  const missing = exportImportPreview.unresolved.filter((row) => row.reason === "Episode-specific ID required" && row.showIds);
+  const groups = new Map();
+  for (const row of missing) {
+    const ids = row.showIds;
+    const showKey = ids.imdb ? "imdb:" + String(ids.imdb).toLowerCase() : ids.tmdb ? "tmdb:" + ids.tmdb : "";
+    const groupKey = showKey + "|s" + Number(row.season);
+    if (!showKey) continue;
+    const contentId = ids.imdb || (ids.tmdb ? "tmdb:" + ids.tmdb : "");
+    if (!contentId) continue;
+    if (!groups.has(groupKey)) groups.set(groupKey, {
+      ids, showKey, contentId, season:Number(row.season), episodeNumbers:new Set(),
+    });
+    groups.get(groupKey).episodeNumbers.add(Number(row.episode));
+  }
+  exportEpisodeLookupInFlight = true;
+  updateExportReadiness();
+  const showCache = new Map();
+  let resolved = 0, missed = 0;
+  try {
+    const targets = [...groups.values()];
+    // Fetch each TV season once; use only public show ID + season number in requests.
+    for (let i = 0; i < targets.length; i += 2) {
+      const answers = await Promise.all(targets.slice(i,i+2).map(async (item) => {
+        try {
+          const cacheId = showCache.get(item.showKey);
+          const found = await resolveTmdbSeasonEpisodeIds({
+            content_id:item.contentId, content_type:"series", season:item.season,
+            _ids:{ tmdb:cacheId || item.ids.tmdb },
+          }, { tmdbReadAccessToken:token });
+          return {item,found};
+        } catch { return {item,found:null}; }
+      }));
+      for (const {item,found} of answers) {
+        if (found?.showTmdbId) showCache.set(item.showKey, found.showTmdbId);
+        const episodesByNumber = new Map((found?.episodes || []).map((episode) => [episode.episode, episode]));
+        for (const episode of item.episodeNumbers) {
+          const matched = episodesByNumber.get(episode);
+          if (!matched?.ids?.tmdb) { missed++; continue; }
+          for (const [service,id] of Object.entries(item.ids)) {
+            if (!["imdb","tmdb","trakt","tvdb"].includes(service) || !id) continue;
+            exportEpisodeIds.set(service + ":" + String(id).toLowerCase() + "|s" + item.season + "e" + episode, matched.ids);
+          }
+          if (matched.episodeTitle) {
+            exportMetadata.set(String(item.contentId).toLowerCase() + "|s" + item.season + "e" + episode, {
+              episodeTitle:matched.episodeTitle,
+            });
+          }
+          resolved++;
+        }
+      }
+      $("export-episode-status").textContent = "Resolved " + resolved + " episode IDs; " + missed +
+        " unmatched. Checked " + Math.min(i+2, targets.length) + "/" + targets.length + " TV seasons…";
+    }
+    renderExportPreview();
+    $("export-episode-status").textContent = resolved + " episode IDs resolved; " + missed + " unmatched. " +
+      (exportImportPreview?.unresolved?.length || 0) +
+      " total unmatched records remain. No whole-show fallback is used.";
+  } finally {
+    token = "";
+    if (field) field.value = "";
+    exportEpisodeLookupInFlight = false;
+    renderTraktImportReadiness();
+    updateExportReadiness();
+  }
+}
+
+function skipUnmatchedTraktChanges() {
+  if (!exportImportPreview || $("export-import-full").checked) return;
+  for (const row of exportImportPreview.unresolved) if (row.changeId) exportExcludedChanges.add(row.changeId);
+  renderExportPreview();
+}
+
+function downloadTraktWebImport() {
+  const result = buildTraktImportJson(exportArchiveTextFiles, exportMergeResult, {
+    scope: $("export-import-full").checked ? "all" : "new",
+    excluded: exportExcludedChanges, episodeIds: exportEpisodeIds,
+  });
+  if (result.unresolved.length) throw new Error("Refusing to export " + result.unresolved.length +
+    " unmatched items. Resolve episode IDs or explicitly exclude unmatched entries.");
+  if (!result.rows.length) throw new Error("No selected watched events or watchlist additions.");
+  const date = new Date().toISOString().slice(0, 10);
+  const scope = $("export-import-full").checked ? "Full" : "New-Only";
+  downloadBytes("Trakt-Nuvio-Import-" + scope + "-" + date + ".json",
+    new TextEncoder().encode(JSON.stringify(result.rows, null, 2)), "application/json");
+  setStatus("Trakt import JSON downloaded with " + result.summary.history + " watches (" +
+    result.summary.episodes + " episodes) and " + result.summary.watchlist +
+    " watchlist additions. Upload this JSON in Trakt's JSON File import option.", "success");
+}
+
 function updateExportReadiness() {
   const button = $("export-button");
   if (!button) return;
-  button.disabled = exportLookupInFlight || !(exportArchiveFiles && exportArchiveTextFiles && state.token && state.remoteBefore && state.selectedProfile && exportMergeResult);
+  const ready = Boolean(exportArchiveFiles && exportArchiveTextFiles && state.token && state.remoteBefore && state.selectedProfile && exportMergeResult);
+  const jsonReady = selectedTraktFormat() !== "import" || Boolean(exportImportPreview && exportImportPreview.unresolved.length === 0 && exportImportPreview.rows.length);
+  button.disabled = exportLookupInFlight || exportEpisodeLookupInFlight || !ready || !jsonReady;
   if ($("export-resolve-button")) $("export-resolve-button").disabled = exportLookupInFlight || !exportCandidates;
 }
 
@@ -373,6 +528,10 @@ function downloadBytes(filename, bytes, type = "application/zip") {
 }
 
 function downloadMergedTraktArchive() {
+  if (selectedTraktFormat() === "import") {
+    try { downloadTraktWebImport(); } catch (error) { setStatus("Import JSON export stopped: " + (error?.message || error), "error"); }
+    return;
+  }
   if (!exportArchiveFiles || !exportArchiveTextFiles || !state.remoteBefore) return;
   const button = $("export-button");
   setBusy(button, true, "Building merged archive…");
@@ -457,6 +616,12 @@ $("tool-export-tab")?.addEventListener("click", () => setToolMode("export"));
 $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
+for (const input of document.querySelectorAll('input[name="reverse-file-format"]')) {
+  input.addEventListener("change", () => { renderTraktImportReadiness(); updateExportReadiness(); });
+}
+$("export-import-full")?.addEventListener("change", () => { renderTraktImportReadiness(); updateExportReadiness(); });
+$("export-resolve-episodes")?.addEventListener("click", resolveMissingTraktEpisodes);
+$("export-skip-unmatched")?.addEventListener("click", skipUnmatchedTraktChanges);
 $("export-resolve-button")?.addEventListener("click", exportResolveTitles);
 $("export-select-all")?.addEventListener("click", () => { exportExcludedChanges.clear(); renderExportPreview(); });
 $("export-select-none")?.addEventListener("click", () => { for (const row of exportAllCandidateRows()) exportExcludedChanges.add(row.id); renderExportPreview(); });
@@ -466,6 +631,7 @@ $("profile-select")?.addEventListener("change", () => {
     state.selectedProfile = null;
     exportExcludedChanges.clear();
     exportMetadata.clear();
+    exportEpisodeIds.clear();
     exportCandidates = null;
     $("remote-summary").hidden = true;
     setStatus("Profile changed. Click Read Nuvio data to load the selected profile.");
