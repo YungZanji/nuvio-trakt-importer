@@ -536,6 +536,7 @@ function updateTraktSyncUi() {
   const ready = Boolean(authorized && exportMergeResult && exportArchiveTextFiles && state.remoteBefore);
   $("trakt-authorize").disabled = traktBusy || authorized;
   $("trakt-resolve-ids").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
+  $("trakt-skip-unmatched-playback").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
   $("trakt-check").disabled = traktBusy || !ready;
   $("trakt-commit").disabled = traktBusy || !traktLivePlan;
   $("trakt-disconnect").disabled = traktBusy || !authorized;
@@ -617,6 +618,20 @@ function syncCandidatesNow() {
   return buildTraktSyncCandidates(exportArchiveTextFiles,exportMergeResult,{
     excluded:exportExcludedChanges,episodeIds:exportEpisodeIds,
   });
+}
+
+function excludeUnmatchedTraktPlayback() {
+  if (!exportMergeResult || !exportArchiveTextFiles) return;
+  const missing=syncCandidatesNow().unresolved.filter(row=>row.kind==="playback" && row.changeId);
+  if (!missing.length) {
+    $("trakt-connect-status").textContent="All selected playback entries already have usable IDs.";
+    return;
+  }
+  if (!window.confirm("Exclude "+missing.length+" unmatched Continue Watching entries from this migration? Their Nuvio records will NOT be deleted. You can re-read Nuvio and retry after identifying them.")) return;
+  for (const row of missing) exportExcludedChanges.add(row.changeId);
+  renderExportPreview();
+  $("trakt-connect-status").textContent=missing.length+
+    " unmatched playback changes excluded by your choice. Other watched-history and watchlist entries remain selected. Compare with live Trakt again.";
 }
 
 async function compareTraktDirect() {
@@ -806,6 +821,7 @@ $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
 $("trakt-authorize")?.addEventListener("click", authorizeTraktDirect);
 $("trakt-resolve-ids")?.addEventListener("click", resolveMissingTraktEpisodes);
+$("trakt-skip-unmatched-playback")?.addEventListener("click", excludeUnmatchedTraktPlayback);
 $("trakt-check")?.addEventListener("click", compareTraktDirect);
 $("trakt-commit")?.addEventListener("click", commitTraktDirect);
 $("trakt-disconnect")?.addEventListener("click", disconnectTraktDirect);
