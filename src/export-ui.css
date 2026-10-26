@@ -221,3 +221,15 @@
 .export-choice .change-code { display:block; font-size:.78rem; opacity:.72; margin-top:3px; }
 .export-choice:has(input:not(:checked)) .change-copy { opacity:.52; text-decoration:line-through; }
 .export-change-list li { list-style:none; }
+
+
+.export-format-chooser { margin:24px 0 16px; padding:18px; border:1px solid rgba(255,255,255,.13);border-radius:15px; background:rgba(255,255,255,.025); }
+.export-format-chooser h3 { margin:0 0 12px; }
+.export-format-card { display:flex;align-items:flex-start;gap:12px;padding:13px;border:1px solid rgba(255,255,255,.13); border-radius:12px; margin:10px 0; cursor:pointer; }
+.export-format-card:has(input:checked) { border-color:rgba(149,127,255,.75);background:rgba(149,127,255,.07); }
+.export-format-card input {flex:0 0 auto;margin-top:4px;accent-color:#967cff;}
+.export-format-card span {display:block;min-width:0;}
+.export-format-card strong { display:block;margin-bottom:5px; }
+.export-format-card small {display:block;line-height:1.5;color:var(--muted,#a8adb7);}
+.export-episode-tool { padding:12px 2px 2px; }
+.export-episode-tool button {margin:4px 8px 8px 0;}
