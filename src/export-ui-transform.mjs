@@ -419,7 +419,7 @@ function renderTraktImportReadiness() {
 }
 
 async function resolveMissingTraktEpisodes() {
-  if (exportEpisodeLookupInFlight || !exportImportPreview) return;
+  if (exportEpisodeLookupInFlight || !exportArchiveTextFiles || !exportMergeResult) return;
   const field = $("export-metadata-token");
   let token = String(field?.value || "").trim();
   if (field) field.value = "";
@@ -427,7 +427,19 @@ async function resolveMissingTraktEpisodes() {
     $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above, then click Resolve missing episode IDs.";
     return;
   }
-  const missing = exportImportPreview.unresolved.filter((row) => row.reason === "Episode-specific ID required" && row.showIds);
+  // Include the new watched events AND unfinished episode playback records.
+  // The old JSON-only resolver missed the latter and blocked direct sync.
+  const syncMissing = syncCandidatesNow().unresolved;
+  const fullImportMissing = $("export-import-full")?.checked && exportImportPreview
+    ? exportImportPreview.unresolved : [];
+  const missing = [...syncMissing, ...fullImportMissing].filter((row) =>
+    row.showIds && row.season != null && row.episode != null &&
+    row.reason?.startsWith("Episode-specific ID required"));
+  if (!missing.length) {
+    $("export-episode-status").textContent = "All selected watched and Continue Watching episodes have matching IDs.";
+    $("trakt-connect-status").textContent = "Episode IDs are ready. Compare with live Trakt to continue.";
+    return;
+  }
   const groups = new Map();
   for (const row of missing) {
     const ids = row.showIds;
@@ -481,6 +493,9 @@ async function resolveMissingTraktEpisodes() {
         " unmatched. Checked " + Math.min(i+2, targets.length) + "/" + targets.length + " TV seasons…";
     }
     renderExportPreview();
+    updateTraktSyncUi();
+    $("trakt-connect-status").textContent = "Episode lookup finished: " + resolved +
+      " matched, " + missed + " unmatched. Compare with live Trakt again.";
     $("export-episode-status").textContent = resolved + " episode IDs resolved; " + missed + " unmatched. " +
       (exportImportPreview?.unresolved?.length || 0) +
       " total unmatched records remain. No whole-show fallback is used.";
@@ -520,7 +535,7 @@ function updateTraktSyncUi() {
   const authorized = Boolean(traktConnection && traktConnection.expiresAt>Date.now());
   const ready = Boolean(authorized && exportMergeResult && exportArchiveTextFiles && state.remoteBefore);
   $("trakt-authorize").disabled = traktBusy || authorized;
-  $("trakt-resolve-ids").disabled = traktBusy || !exportMergeResult || !exportArchiveTextFiles;
+  $("trakt-resolve-ids").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
   $("trakt-check").disabled = traktBusy || !ready;
   $("trakt-commit").disabled = traktBusy || !traktLivePlan;
   $("trakt-disconnect").disabled = traktBusy || !authorized;
@@ -614,7 +629,10 @@ async function compareTraktDirect() {
     if(candidates.unresolved.length){
       const samples=candidates.unresolved.slice(0,4).map(row=>
         row.title+(row.season!=null?" S"+row.season+"E"+row.episode:"")+": "+row.reason).join("; ");
-      throw Error(candidates.unresolved.length+" selected items lack a safe media ID. Resolve missing episode IDs (in JSON mode) or uncheck those items first. "+samples);
+      const error = new Error(candidates.unresolved.length +
+        " selected changes lack an episode/movie ID. " + samples);
+      error.code = "MISSING_IDS";
+      throw error;
     }
     const api=makeTraktApi(traktConnection);
     const {body:profile}=await api("/users/settings");
@@ -631,7 +649,9 @@ async function compareTraktDirect() {
     $("trakt-connect-status").textContent="Live comparison complete. Review the counts and confirm separately before any changes.";
   } catch(error) {
     $("trakt-connect-status").textContent="Live Trakt comparison failed: "+(error.message||error)+
-      ". No changes were sent to Trakt. Ensure your app's CORS origin is set correctly.";
+      ". No changes were sent to Trakt." + (error?.code === "MISSING_IDS"
+        ? " Use Resolve missing episode IDs above or explicitly exclude unmatched changes."
+        : " Check your Trakt app CORS settings only if this is a network/API error.");
   } finally {
     traktBusy=false;
     updateTraktSyncUi();
@@ -785,17 +805,7 @@ $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
 $("trakt-authorize")?.addEventListener("click", authorizeTraktDirect);
-$("trakt-resolve-ids")?.addEventListener("click", async () => {
-  if(!exportMergeResult || !exportArchiveTextFiles) return;
-  // Reuse the same vetted episode ID matching engine as the JSON output.
-  if(selectedTraktFormat() !== "import") {
-    const input=document.querySelector('input[name="reverse-file-format"][value="import"]');
-    if(input) input.checked=true;
-    renderTraktImportReadiness();
-    updateExportReadiness();
-  }
-  await resolveMissingTraktEpisodes();
-});
+$("trakt-resolve-ids")?.addEventListener("click", resolveMissingTraktEpisodes);
 $("trakt-check")?.addEventListener("click", compareTraktDirect);
 $("trakt-commit")?.addEventListener("click", commitTraktDirect);
 $("trakt-disconnect")?.addEventListener("click", disconnectTraktDirect);
