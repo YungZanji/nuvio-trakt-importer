@@ -4,7 +4,7 @@ function replaceRequired(source, needle, replacement, label) {
 }
 
 export function patchExportUiSource(source) {
-  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbEpisodeId } from "./metadata-provider.mjs";\n${source}`;
+  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbSeasonEpisodeIds } from "./metadata-provider.mjs";\n${source}`;
 
   patched = replaceRequired(
     patched,
@@ -404,58 +404,71 @@ async function resolveMissingTraktEpisodes() {
   let token = String(field?.value || "").trim();
   if (field) field.value = "";
   if (!token) {
-    $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above and click Resolve missing episode IDs.";
+    $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above, then click Resolve missing episode IDs.";
     return;
   }
   const missing = exportImportPreview.unresolved.filter((row) => row.reason === "Episode-specific ID required" && row.showIds);
-  const distinct = new Map();
+  const groups = new Map();
   for (const row of missing) {
     const ids = row.showIds;
     const showKey = ids.imdb ? "imdb:" + String(ids.imdb).toLowerCase() : ids.tmdb ? "tmdb:" + ids.tmdb : "";
-    const key = showKey + "|s" + Number(row.season) + "e" + Number(row.episode);
-    if (!showKey || distinct.has(key)) continue;
+    const groupKey = showKey + "|s" + Number(row.season);
+    if (!showKey) continue;
     const contentId = ids.imdb || (ids.tmdb ? "tmdb:" + ids.tmdb : "");
-    if (contentId) distinct.set(key, { ids, showKey, contentId, season:Number(row.season), episode:Number(row.episode) });
+    if (!contentId) continue;
+    if (!groups.has(groupKey)) groups.set(groupKey, {
+      ids, showKey, contentId, season:Number(row.season), episodeNumbers:new Set(),
+    });
+    groups.get(groupKey).episodeNumbers.add(Number(row.episode));
   }
   exportEpisodeLookupInFlight = true;
   updateExportReadiness();
   const showCache = new Map();
   let resolved = 0, missed = 0;
   try {
-    const targets = [...distinct.values()];
-    for (let i = 0; i < targets.length; i += 3) {
-      const answers = await Promise.all(targets.slice(i,i+3).map(async (item) => {
+    const targets = [...groups.values()];
+    // Fetch each TV season once; use only public show ID + season number in requests.
+    for (let i = 0; i < targets.length; i += 2) {
+      const answers = await Promise.all(targets.slice(i,i+2).map(async (item) => {
         try {
-          const cachedShowId = showCache.get(item.showKey);
-          const found = await resolveTmdbEpisodeId({
-            content_id: item.contentId,
-            content_type: "series", season:item.season, episode:item.episode,
-            _ids: { tmdb: cachedShowId || item.ids.tmdb },
-          }, { tmdbReadAccessToken: token });
-          return { item, found };
-        } catch { return { item, found:null }; }
+          const cacheId = showCache.get(item.showKey);
+          const found = await resolveTmdbSeasonEpisodeIds({
+            content_id:item.contentId, content_type:"series", season:item.season,
+            _ids:{ tmdb:cacheId || item.ids.tmdb },
+          }, { tmdbReadAccessToken:token });
+          return {item,found};
+        } catch { return {item,found:null}; }
       }));
-      for (const { item, found } of answers) {
-        if (found?.ids?.tmdb) {
-          showCache.set(item.showKey, found.showTmdbId);
+      for (const {item,found} of answers) {
+        if (found?.showTmdbId) showCache.set(item.showKey, found.showTmdbId);
+        const episodesByNumber = new Map((found?.episodes || []).map((episode) => [episode.episode, episode]));
+        for (const episode of item.episodeNumbers) {
+          const matched = episodesByNumber.get(episode);
+          if (!matched?.ids?.tmdb) { missed++; continue; }
           for (const [service,id] of Object.entries(item.ids)) {
             if (!["imdb","tmdb","trakt","tvdb"].includes(service) || !id) continue;
-            exportEpisodeIds.set(service + ":" + String(id).toLowerCase() + "|s" + item.season + "e" + item.episode, found.ids);
+            exportEpisodeIds.set(service + ":" + String(id).toLowerCase() + "|s" + item.season + "e" + episode, matched.ids);
+          }
+          if (matched.episodeTitle) {
+            exportMetadata.set(String(item.contentId).toLowerCase() + "|s" + item.season + "e" + episode, {
+              episodeTitle:matched.episodeTitle,
+            });
           }
           resolved++;
-        } else missed++;
+        }
       }
-      $("export-episode-status").textContent = "Resolved " + resolved + " of " +
-        targets.length + " episode IDs; " + missed + " not matched…";
+      $("export-episode-status").textContent = "Resolved " + resolved + " episode IDs; " + missed +
+        " unmatched. Checked " + Math.min(i+2, targets.length) + "/" + targets.length + " TV seasons…";
     }
     renderExportPreview();
-    $("export-episode-status").textContent = resolved + " episode IDs matched, " + missed +
-      " unresolved. " + (exportImportPreview?.unresolved?.length || 0) +
-      " total unmatched records remain. Unmatched episodes will not be treated as whole shows.";
+    $("export-episode-status").textContent = resolved + " episode IDs resolved; " + missed + " unmatched. " +
+      (exportImportPreview?.unresolved?.length || 0) +
+      " total unmatched records remain. No whole-show fallback is used.";
   } finally {
     token = "";
     if (field) field.value = "";
     exportEpisodeLookupInFlight = false;
+    renderTraktImportReadiness();
     updateExportReadiness();
   }
 }
