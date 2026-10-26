@@ -520,6 +520,7 @@ function updateTraktSyncUi() {
   const authorized = Boolean(traktConnection && traktConnection.expiresAt>Date.now());
   const ready = Boolean(authorized && exportMergeResult && exportArchiveTextFiles && state.remoteBefore);
   $("trakt-authorize").disabled = traktBusy || authorized;
+  $("trakt-resolve-ids").disabled = traktBusy || !exportMergeResult || !exportArchiveTextFiles;
   $("trakt-check").disabled = traktBusy || !ready;
   $("trakt-commit").disabled = traktBusy || !traktLivePlan;
   $("trakt-disconnect").disabled = traktBusy || !authorized;
@@ -784,6 +785,17 @@ $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
 $("trakt-authorize")?.addEventListener("click", authorizeTraktDirect);
+$("trakt-resolve-ids")?.addEventListener("click", async () => {
+  if(!exportMergeResult || !exportArchiveTextFiles) return;
+  // Reuse the same vetted episode ID matching engine as the JSON output.
+  if(selectedTraktFormat() !== "import") {
+    const input=document.querySelector('input[name="reverse-file-format"][value="import"]');
+    if(input) input.checked=true;
+    renderTraktImportReadiness();
+    updateExportReadiness();
+  }
+  await resolveMissingTraktEpisodes();
+});
 $("trakt-check")?.addEventListener("click", compareTraktDirect);
 $("trakt-commit")?.addEventListener("click", commitTraktDirect);
 $("trakt-disconnect")?.addEventListener("click", disconnectTraktDirect);
