@@ -82,6 +82,21 @@ function insertEpisodeIds(index, map) {
   }
 }
 
+function showImdbIds(textFiles, mergeResult) {
+  const imdb = new Set();
+  const inputs = [
+    ...relevantHistory(textFiles, mergeResult.updates),
+    ...relevantArray(textFiles, "lists-watchlist.json", mergeResult.updates),
+    ...mergeResult.changes.history.map((row) => row.entry),
+    ...mergeResult.changes.watchlist.map((row) => row.entry),
+  ];
+  for (const entry of inputs) {
+    const id = entry?.show?.ids?.imdb;
+    if (typeof id === "string" && /^tt\d+$/i.test(id)) imdb.add(id.toLowerCase());
+  }
+  return imdb;
+}
+
 function formatEntry(entry, kind, episodeIndex) {
   const type = entry?.type === "episode" ? "episode" : entry?.movie ? "movie" : "show";
   const media = entry?.movie || entry?.show;
@@ -116,6 +131,7 @@ export function buildTraktImportJson(textFiles, mergeResult, {
   if (!mergeResult?.updates || !mergeResult?.changes) throw new Error("Merge the Trakt archive first.");
   if (!["new", "all"].includes(scope)) throw new Error("Unknown import scope.");
   const index = episodeIndexFor(relevantHistory(textFiles));
+  const showIds = showImdbIds(textFiles, mergeResult);
   insertEpisodeIds(index, episodeIds);
   const rows = [];
   const unresolved = [];
@@ -130,7 +146,11 @@ export function buildTraktImportJson(textFiles, mergeResult, {
     : selected(mergeResult.changes.watchlist);
   for (const [kind, entries] of [["history", history], ["watchlist", watchlist]]) {
     for (const { entry, changeId } of entries) {
-      const converted = formatEntry(entry, kind, index);
+      const movieImdb = entry?.movie?.ids?.imdb;
+      const conflicting = typeof movieImdb === "string" && showIds.has(movieImdb.toLowerCase());
+      const converted = conflicting
+        ? { error:"Movie/show identifier conflict" }
+        : formatEntry(entry, kind, index);
       if (converted.row) rows.push(converted.row);
       else unresolved.push({
         changeId, kind, reason: converted.error,
