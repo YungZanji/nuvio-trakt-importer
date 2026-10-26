@@ -557,6 +557,9 @@ function updateTraktSyncUi() {
   $("trakt-skip-unmatched-playback").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
   $("trakt-check").disabled = traktBusy || !ready;
   $("trakt-commit").disabled = traktBusy || !traktLivePlan;
+  // Freeze checked selections while comparing or writing so the UI cannot
+  // imply that a mid-flight checkbox change cancelled an already-sent batch.
+  for(const input of document.querySelectorAll(".export-choice input[type=checkbox]")) input.disabled=traktBusy;
   $("trakt-disconnect").disabled = traktBusy || !authorized;
   $("trakt-live-plan").hidden = !traktLivePlan;
   if (!authorized && !traktBusy) $("trakt-connect-status").textContent = "Not connected to Trakt.";
