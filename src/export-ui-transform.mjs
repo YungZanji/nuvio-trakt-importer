@@ -425,6 +425,7 @@ async function resolveMissingTraktEpisodes() {
   if (field) field.value = "";
   if (!token) {
     $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above, then click Resolve missing episode IDs.";
+    $("trakt-connect-status").textContent = "A TMDB API Read Access Token is needed to identify the remaining paused episodes. Paste it in Resolve missing titles and episode names above, then try again.";
     return;
   }
   // Include the new watched events AND unfinished episode playback records.
@@ -491,11 +492,19 @@ async function resolveMissingTraktEpisodes() {
       }
       $("export-episode-status").textContent = "Resolved " + resolved + " episode IDs; " + missed +
         " unmatched. Checked " + Math.min(i+2, targets.length) + "/" + targets.length + " TV seasons…";
+      $("trakt-connect-status").textContent = "Looking up episode IDs: " +
+        Math.min(i+2, targets.length) + "/" + targets.length +
+        " TV seasons checked, " + resolved + " episodes resolved so far.";
     }
     renderExportPreview();
     updateTraktSyncUi();
+    const remaining = syncCandidatesNow().unresolved;
+    const remainingPlayback = remaining.filter(item=>item.kind==="playback").length;
     $("trakt-connect-status").textContent = "Episode lookup finished: " + resolved +
-      " matched, " + missed + " unmatched. Compare with live Trakt again.";
+      " matched, " + missed + " unmatched. " + remainingPlayback +
+      " Continue Watching entries still need IDs. " +
+      (remaining.length ? "Resolve or explicitly exclude them before comparing again." :
+        "All selected changes have IDs. Compare with live Trakt again.");
     $("export-episode-status").textContent = resolved + " episode IDs resolved; " + missed + " unmatched. " +
       (exportImportPreview?.unresolved?.length || 0) +
       " total unmatched records remain. No whole-show fallback is used.";
