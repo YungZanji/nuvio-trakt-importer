@@ -16,10 +16,16 @@ const normalizedId = (item) => {
 };
 const rowKeys = (row) => mediaKey(row.type, normalizedId(row));
 const iso = (v) => { const ms=Date.parse(v||""); return Number.isFinite(ms)?new Date(ms).toISOString():null; };
+// Trakt normalizes ALL watched_at timestamps to minute precision (2026 API).
+// Use the same normalization for the GET start_at lower bound AND comparisons.
+const watchMinute = (value) => {
+  const ms=Date.parse(value||"");
+  return Number.isFinite(ms)?new Date(Math.floor(ms/60000)*60000).toISOString():null;
+};
 const sortDedupe = (rows) => {
   const map = new Map();
   for(const row of rows){
-    const key = rowKeys(row)[0] + "|" + (row.watched_at || row.watchlisted_at || "");
+    const key = rowKeys(row)[0] + "|" + (row.watched_at ? watchMinute(row.watched_at) : row.watchlisted_at || "");
     if(!map.has(key))map.set(key,row);
   }
   return [...map.values()];
@@ -158,7 +164,8 @@ const mapRemote=(entries)=>new Map(entries.flatMap(row=>
 /** Read-only live comparison, always performed before any account writes. */
 export async function planTraktSync(api,candidates,{acknowledged={history:new Set(),watchlist:new Set(),playback:new Set()}}={}) {
   if(candidates.unresolved.length)throw new Error("Resolve or explicitly exclude "+candidates.unresolved.length+" unmatched items before syncing.");
-  const start=[...candidates.watched.map(r=>iso(r.watched_at)),...candidates.playback.map(r=>iso(r.paused_at))].filter(Boolean).sort()[0];
+  const start=[...candidates.watched.map(r=>watchMinute(r.watched_at)),
+    ...candidates.playback.map(r=>watchMinute(r.paused_at))].filter(Boolean).sort()[0];
   const historyPath="/sync/history"+(start?"?start_at="+encodeURIComponent(start):"");
   const [history,watchMovies,watchShows,playback]=await Promise.all([
     (candidates.watched.length||candidates.playback.length)?paginated(api,historyPath):Promise.resolve([]),
@@ -169,7 +176,7 @@ export async function planTraktSync(api,candidates,{acknowledged={history:new Se
   const watches=new Set();
   const watchedLatest=new Map();
   for(const item of history){
-    const time=iso(item.watched_at);
+    const time=watchMinute(item.watched_at);
     if(!time)continue;
     for(const key of remoteKeys(item)){
       watches.add(key+"|"+time);
@@ -179,7 +186,8 @@ export async function planTraktSync(api,candidates,{acknowledged={history:new Se
   const additions=candidates.watched.filter(row=>
     !acknowledged.history.has(JSON.stringify(row)) &&
     !rowKeys(row).some(k=>
-      watches.has(k+"|"+iso(row.watched_at)) || (watchedLatest.get(k)||0) >= Date.parse(row.watched_at)
+      watches.has(k+"|"+watchMinute(row.watched_at)) ||
+      (watchedLatest.get(k)||0) >= Date.parse(watchMinute(row.watched_at))
     )
   );
   const listed=new Set([...watchMovies,...watchShows].flatMap(remoteKeys));
@@ -204,7 +212,7 @@ export async function planTraktSync(api,candidates,{acknowledged={history:new Se
 }
 
 const chunks=(arr,size)=>Array.from({length:Math.ceil(arr.length/size)},(_,i)=>arr.slice(i*size,(i+1)*size));
-function historyObject(row){return {watched_at:row.watched_at,ids:normalizedId(row)};}
+function historyObject(row){return {watched_at:watchMinute(row.watched_at),ids:normalizedId(row)};}
 function watchlistObject(row){return {listed_at:row.watchlisted_at,ids:normalizedId(row)};}
 
 /** Apply only after explicit user confirmation. Halt on API failure; report partial writes honestly. */
