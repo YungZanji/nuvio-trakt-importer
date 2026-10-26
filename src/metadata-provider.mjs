@@ -197,3 +197,29 @@ export async function resolveTmdbEpisodeId(item, {
     episodeTitle: detail.name || null,
   };
 }
+
+
+/** Resolve an entire season in one request (instead of hundreds of episode calls). */
+export async function resolveTmdbSeasonEpisodeIds(item, {
+  tmdbReadAccessToken = "",
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (!tmdbReadAccessToken) throw new Error("A TMDB read token is required.");
+  if (typeof fetchImpl !== "function") throw new Error("fetch is unavailable");
+  const season = Number(item?.season);
+  if (!Number.isInteger(season) || season < 0) throw new Error("Invalid season");
+  const showId = await resolveTmdbId({ ...item, content_type: "series" }, tmdbReadAccessToken, fetchImpl);
+  if (!showId) return null;
+  const url = TMDB_API_BASE + "/tv/" + showId + "/season/" + season + "?language=en-US";
+  const body = await fetchJson(url, {
+    fetchImpl, headers: { Authorization: "Bearer " + tmdbReadAccessToken },
+  });
+  if (!Array.isArray(body?.episodes)) return null;
+  const episodes = body.episodes.filter((row) =>
+    numericId(row?.id) && Number(row.season_number) === season && Number.isInteger(Number(row.episode_number))
+  ).map((row) => ({
+    season, episode:Number(row.episode_number),
+    ids:{ tmdb:Number(row.id) }, episodeTitle:row.name || null,
+  }));
+  return { showTmdbId: showId, episodes };
+}
