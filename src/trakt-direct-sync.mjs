@@ -119,7 +119,7 @@ async function paginated(api,path,limit=100) {
     if(!Array.isArray(body))throw new Error("Unexpected Trakt response for "+path);
     all.push(...body);
     const pages=Number(response.headers?.get?.("x-pagination-page-count"));
-    if(pages>0 && page>=pages)return all;
+    if(pages>0){if(page>=pages)return all;continue;}
     if(body.length<limit)return all;
   }
   throw new Error("Too many Trakt results; sync aborted rather than comparing an incomplete account.");
@@ -156,7 +156,6 @@ export async function planTraktSync(api,candidates) {
   const listAdditions=candidates.watchlist.filter(row=>!overlaps(rowKeys(row),listed));
   const existing=mapRemote(playback);
   const pauses=candidates.playback.filter(item=>{
-    const match=item.type+"|";
     const stored=item.ids && mediaKey(item.type,item.ids).map(k=>existing.get(k)).find(Boolean);
     if(!stored)return true;
     const oldTime=Date.parse(stored.paused_at||"")||0;
