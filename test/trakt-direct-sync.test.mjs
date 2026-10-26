@@ -182,3 +182,89 @@ test("pause-only episodes are included in ID resolution rather than silently rem
   assert.equal(omitted.playback.length,0);
   assert.equal(omitted.unresolved.length,0);
 });
+
+
+test("Trakt pause threshold: 84.7152% is never sent as stop or pause or marked watched", async () => {
+  const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const merged={updates:new Map(),changes:{history:[],watchlist:[],playback:[
+    {id:"progress:0",action:"add",entry:{type:"movie",movie,progress:84.7152,paused_at:"2026-10-26T01:00:00Z"}},
+    {id:"progress:1",action:"add",entry:{type:"movie",movie:{title:"Another",ids:{tmdb:91}},progress:42.25,paused_at:"2026-10-26T02:00:00Z"}},
+  ]}};
+  const candidates=buildTraktSyncCandidates(source,merged);
+  assert.equal(candidates.playback.length,1);
+  assert.equal(candidates.playback[0].progress,42.25);
+  assert.equal(candidates.unsupportedPlayback.length,1);
+  assert.equal(candidates.unsupportedPlayback[0].progress,84.7152);
+  const calls=[];
+  const api=async(path,opts={})=>{
+    calls.push({path,opts});
+    if(path.startsWith("/sync/history")||path.startsWith("/sync/playback"))return wrap([]);
+    if(path==="/scrobble/pause")return wrap({action:"pause"});
+    throw new Error("Unexpected call "+path);
+  };
+  const plan=await planTraktSync(api,candidates);
+  assert.equal(plan.unsupportedPlayback.length,1);
+  const result=await executeTraktSync(api,plan);
+  assert.equal(result.playback,1);
+  assert.equal(calls.filter(c=>c.path==="/scrobble/pause").length,1);
+  assert.equal(calls.some(c=>c.path==="/scrobble/stop"),false);
+});
+
+test("direct-sync explicit UI allowlist wins over old merged selections", () => {
+  const picked=buildTraktSyncCandidates(oldFiles,merged,{episodeIds:ids,
+    selectedChangeIds:new Set(["watched:0"])});
+  assert.equal(picked.watched.length,1);
+  assert.equal(picked.watchlist.length,0);
+  assert.equal(picked.playback.length,0);
+  const none=buildTraktSyncCandidates(oldFiles,merged,{episodeIds:ids,
+    selectedChangeIds:new Set()});
+  assert.equal(none.watched.length+none.watchlist.length+none.playback.length,0);
+  const exclude=buildTraktSyncCandidates(oldFiles,merged,{episodeIds:ids,
+    selectedChangeIds:new Set(["watched:0","progress:0"]),excluded:new Set(["progress:0"])});
+  assert.equal(exclude.playback.length,0);
+  assert.equal(exclude.watched.length,1);
+});
+
+test("acknowledged batch ledger prevents a second write even when Trakt readback is stale", async () => {
+  const candidate=buildTraktSyncCandidates(oldFiles,merged,{episodeIds:ids});
+  const calls=[];
+  const api=async(path,options={})=>{
+    calls.push(path);
+    if(path.startsWith("/sync/history")||path.startsWith("/sync/watchlist")||path.startsWith("/sync/playback")) {
+      if(options.method!=="POST")return wrap([]);
+      if(path==="/sync/history")return wrap({added:{episodes:1,movies:0}});
+      return wrap({added:{shows:1,movies:0}});
+    }
+    if(path==="/scrobble/pause")return wrap({action:"pause"});
+    throw new Error(path);
+  };
+  const accepted={history:new Set(),watchlist:new Set(),playback:new Set()};
+  const first=await planTraktSync(api,candidate);
+  await executeTraktSync(api,first,{sleep:async()=>{},onConfirmed:(kind,group)=>{
+    for(const row of group)accepted[kind].add(kind==="playback"?row.changeId+"|"+row.progress:JSON.stringify(row));
+  }});
+  assert.equal(accepted.history.size,1);
+  assert.equal(accepted.watchlist.size,1);
+  assert.equal(accepted.playback.size,1);
+  const second=await planTraktSync(api,candidate,{acknowledged:accepted});
+  assert.deepEqual([second.history.length,second.watchlist.length,second.playback.length],[0,0,0]);
+});
+
+test("Trakt sync refuses >=80% pause even if a malformed older plan slips through",async()=>{
+  const api=async()=>{throw Error("No API write expected");};
+  await assert.rejects(executeTraktSync(api,{history:[],watchlist:[],playback:[
+    {changeId:"progress:0",type:"movie",ids:{imdb:"tt1234567"},progress:84.7152}
+  ]}),/cannot be restored exactly/);
+});
+
+test("partial Trakt batch only acknowledges fully confirmed groups",async()=>{
+  const groups=[];
+  const rows=[{type:"movie",imdb_id:"tt1234567",watched_at:"2026-10-21T13:00:00Z"},
+    {type:"movie",imdb_id:"tt1234568",watched_at:"2026-10-22T13:00:00Z"}];
+  const report=await executeTraktSync(async(path)=>{
+    assert.equal(path,"/sync/history");
+    return wrap({added:{movies:1,episodes:0},not_found:{movies:[{}]}});
+  },{history:rows,watchlist:[],playback:[]},{onConfirmed:(kind,group)=>groups.push(group),sleep:async()=>{}});
+  assert.equal(report.history,1);
+  assert.equal(groups.length,0);
+});
