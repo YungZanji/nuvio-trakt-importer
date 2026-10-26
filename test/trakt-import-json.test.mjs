@@ -86,3 +86,17 @@ test("file generator rejects malformed relevant history, instead of silently dro
   const files=archive();files.set("watched-history-1.json","{");
   assert.throws(()=>buildTraktImportJson(files,merger(archive()),{scope:"all"}),/Cannot parse/);
 });
+
+
+test("rejects movie records whose IMDb ID also identifies a TV show",()=>{
+  const files=archive();
+  const ambiguous={type:"movie",movie:{title:"VisionQuest",ids:{imdb:"tt23112594"}},watched_at:"2026-02-01T00:00:00Z"};
+  const tv={type:"episode",show:{title:"VisionQuest",ids:{imdb:"tt23112594"}},episode:{season:1,number:1},watched_at:"2026-02-02T00:00:00Z"};
+  const merge={
+    changes:{history:[{id:"watched:0",entry:ambiguous},{id:"watched:1",entry:tv}],watchlist:[],playback:[]},
+    updates:new Map([["watched-history-1.json",JSON.stringify([...JSON.parse(files.get("watched-history-1.json")),ambiguous,tv])]]),
+  };
+  const result=buildTraktImportJson(files,merge);
+  assert.ok(result.unresolved.some(item=>item.reason==="Movie/show identifier conflict"&&item.changeId==="watched:0"));
+  assert.equal(result.rows.filter(item=>item.type==="movie").length,0);
+});
