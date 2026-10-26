@@ -361,6 +361,128 @@ function renderExportPreview() {
   }
 }
 
+function selectedTraktFormat() {
+  return document.querySelector('input[name="reverse-file-format"]:checked')?.value === "import" ? "import" : "archive";
+}
+
+function renderTraktImportReadiness() {
+  const isImport = selectedTraktFormat() === "import";
+  $("export-import-options").hidden = !isImport;
+  $("export-button").textContent = isImport ? "Download Trakt import JSON (.json)" : "Download merged Trakt archive (.zip)";
+  if (!isImport || !exportMergeResult || !exportArchiveTextFiles) {
+    exportImportPreview = null;
+    return;
+  }
+  try {
+    const scope = $("export-import-full").checked ? "all" : "new";
+    exportImportPreview = buildTraktImportJson(exportArchiveTextFiles, exportMergeResult, {
+      scope, excluded: exportExcludedChanges, episodeIds: exportEpisodeIds,
+    });
+    const count = exportImportPreview.summary;
+    const missing = exportImportPreview.unresolved;
+    const missingEpisodes = missing.filter((row) => row.reason === "Episode-specific ID required");
+    $("export-episode-status").textContent =
+      count.history + " watched events (" + count.episodes + " individual episodes), " +
+      count.watchlist + " watchlist entries ready for JSON. " +
+      (missing.length ? missing.length + " unmatched, including " + missingEpisodes.length +
+        " episodes. Resolve or exclude them before downloading." : "All IDs and dates are valid.");
+    $("export-resolve-episodes").disabled = exportEpisodeLookupInFlight || !missingEpisodes.length;
+    const skip = $("export-skip-unmatched");
+    skip.hidden = !missing.length || scope === "all" || !missing.some((item) => item.changeId);
+    skip.disabled = exportEpisodeLookupInFlight;
+  } catch (error) {
+    exportImportPreview = null;
+    $("export-episode-status").textContent = "Cannot validate Trakt import: " + (error.message || error);
+    $("export-resolve-episodes").disabled = true;
+    $("export-skip-unmatched").hidden = true;
+  }
+}
+
+async function resolveMissingTraktEpisodes() {
+  if (exportEpisodeLookupInFlight || !exportImportPreview) return;
+  const field = $("export-metadata-token");
+  let token = String(field?.value || "").trim();
+  if (field) field.value = "";
+  if (!token) {
+    $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above and click Resolve missing episode IDs.";
+    return;
+  }
+  const missing = exportImportPreview.unresolved.filter((row) => row.reason === "Episode-specific ID required" && row.showIds);
+  const distinct = new Map();
+  for (const row of missing) {
+    const ids = row.showIds;
+    const showKey = ids.imdb ? "imdb:" + String(ids.imdb).toLowerCase() : ids.tmdb ? "tmdb:" + ids.tmdb : "";
+    const key = showKey + "|s" + Number(row.season) + "e" + Number(row.episode);
+    if (!showKey || distinct.has(key)) continue;
+    const contentId = ids.imdb || (ids.tmdb ? "tmdb:" + ids.tmdb : "");
+    if (contentId) distinct.set(key, { ids, showKey, contentId, season:Number(row.season), episode:Number(row.episode) });
+  }
+  exportEpisodeLookupInFlight = true;
+  updateExportReadiness();
+  const showCache = new Map();
+  let resolved = 0, missed = 0;
+  try {
+    const targets = [...distinct.values()];
+    for (let i = 0; i < targets.length; i += 3) {
+      const answers = await Promise.all(targets.slice(i,i+3).map(async (item) => {
+        try {
+          const cachedShowId = showCache.get(item.showKey);
+          const found = await resolveTmdbEpisodeId({
+            content_id: item.contentId,
+            content_type: "series", season:item.season, episode:item.episode,
+            _ids: { tmdb: cachedShowId || item.ids.tmdb },
+          }, { tmdbReadAccessToken: token });
+          return { item, found };
+        } catch { return { item, found:null }; }
+      }));
+      for (const { item, found } of answers) {
+        if (found?.ids?.tmdb) {
+          showCache.set(item.showKey, found.showTmdbId);
+          for (const [service,id] of Object.entries(item.ids)) {
+            if (!["imdb","tmdb","trakt","tvdb"].includes(service) || !id) continue;
+            exportEpisodeIds.set(service + ":" + String(id).toLowerCase() + "|s" + item.season + "e" + item.episode, found.ids);
+          }
+          resolved++;
+        } else missed++;
+      }
+      $("export-episode-status").textContent = "Resolved " + resolved + " of " +
+        targets.length + " episode IDs; " + missed + " not matched…";
+    }
+    renderExportPreview();
+    $("export-episode-status").textContent = resolved + " episode IDs matched, " + missed +
+      " unresolved. " + (exportImportPreview?.unresolved?.length || 0) +
+      " total unmatched records remain. Unmatched episodes will not be treated as whole shows.";
+  } finally {
+    token = "";
+    if (field) field.value = "";
+    exportEpisodeLookupInFlight = false;
+    updateExportReadiness();
+  }
+}
+
+function skipUnmatchedTraktChanges() {
+  if (!exportImportPreview || $("export-import-full").checked) return;
+  for (const row of exportImportPreview.unresolved) if (row.changeId) exportExcludedChanges.add(row.changeId);
+  renderExportPreview();
+}
+
+function downloadTraktWebImport() {
+  const result = buildTraktImportJson(exportArchiveTextFiles, exportMergeResult, {
+    scope: $("export-import-full").checked ? "all" : "new",
+    excluded: exportExcludedChanges, episodeIds: exportEpisodeIds,
+  });
+  if (result.unresolved.length) throw new Error("Refusing to export " + result.unresolved.length +
+    " unmatched items. Resolve episode IDs or explicitly exclude unmatched entries.");
+  if (!result.rows.length) throw new Error("No selected watched events or watchlist additions.");
+  const date = new Date().toISOString().slice(0, 10);
+  const scope = $("export-import-full").checked ? "Full" : "New-Only";
+  downloadBytes("Trakt-Nuvio-Import-" + scope + "-" + date + ".json",
+    new TextEncoder().encode(JSON.stringify(result.rows, null, 2)), "application/json");
+  setStatus("Trakt import JSON downloaded with " + result.summary.history + " watches (" +
+    result.summary.episodes + " episodes) and " + result.summary.watchlist +
+    " watchlist additions. Upload this JSON in Trakt's JSON File import option.", "success");
+}
+
 function updateExportReadiness() {
   const button = $("export-button");
   if (!button) return;
