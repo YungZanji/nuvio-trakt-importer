@@ -38,15 +38,23 @@ function episodePlaybackIds(row, episodeIds) {
 }
 
 /** Builds requests from the exact selected Nuvio changes, never from all original Trakt records. */
-export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),episodeIds=new Map()}={}) {
+export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),episodeIds=new Map(),selectedChangeIds=null}={}) {
+  // The UI's displayed proposed-change IDs are the authoritative allowlist for sync.
+  // A prior live plan cannot silently re-include a checkbox that was unchecked.
+  const effectiveExcluded=new Set(excluded);
+  if(selectedChangeIds){
+    const selected=new Set(selectedChangeIds);
+    for(const group of Object.values(merged.changes || {}))
+      for(const item of group || []) if(!selected.has(item.id)) effectiveExcluded.add(item.id);
+  }
   const effectiveEpisodeIds=new Map([...buildTraktEpisodeIdIndex(textFiles),...episodeIds]);
-  const converted=buildTraktImportJson(textFiles,merged,{scope:"new",excluded,episodeIds:effectiveEpisodeIds});
+  const converted=buildTraktImportJson(textFiles,merged,{scope:"new",excluded:effectiveExcluded,episodeIds:effectiveEpisodeIds});
   const watched=sortDedupe(converted.rows.filter(r=>r.watched_at));
   const watchlist=sortDedupe(converted.rows.filter(r=>r.watchlisted_at));
   const playback=[];
   const unresolved=[...converted.unresolved];
   for(const change of merged.changes.playback || []){
-    if(excluded.has(change.id)||change.action==="clear")continue; // remote deletions never performed
+    if(effectiveExcluded.has(change.id)||change.action==="clear")continue; // remote deletions never performed
     const entry=change.entry, progress=Number(entry?.progress);
     if(!(progress>0&&progress<100)||!iso(entry?.paused_at))continue;
     const isEpisode=entry.type==="episode";
@@ -63,7 +71,12 @@ export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),
     }
     playback.push({type:isEpisode?"episode":"movie",ids,progress,paused_at:iso(entry.paused_at),changeId:change.id});
   }
-  return { watched,watchlist,playback,unresolved };
+  // /scrobble/pause rejects progress above the Trakt completion threshold.
+  // Never issue /scrobble/stop instead: it would mark unfinished media as watched.
+  // Keep these in the ZIP backup with their real percentage, and disclose them.
+  const unsupportedPlayback=playback.filter(item=>item.progress>=80);
+  const safePlayback=playback.filter(item=>item.progress<80);
+  return { watched,watchlist,playback:safePlayback,unsupportedPlayback,unresolved };
 }
 
 function randomBase64Url(bytes=32) {
@@ -141,7 +154,7 @@ const mapRemote=(entries)=>new Map(entries.flatMap(row=>
   remoteKeys(row).map(key=>[key,row])));
 
 /** Read-only live comparison, always performed before any account writes. */
-export async function planTraktSync(api,candidates) {
+export async function planTraktSync(api,candidates,{acknowledged={history:new Set(),watchlist:new Set(),playback:new Set()}}={}) {
   if(candidates.unresolved.length)throw new Error("Resolve or explicitly exclude "+candidates.unresolved.length+" unmatched items before syncing.");
   const start=[...candidates.watched.map(r=>iso(r.watched_at)),...candidates.playback.map(r=>iso(r.paused_at))].filter(Boolean).sort()[0];
   const historyPath="/sync/history"+(start?"?start_at="+encodeURIComponent(start):"");
@@ -161,13 +174,19 @@ export async function planTraktSync(api,candidates) {
       watchedLatest.set(key,Math.max(watchedLatest.get(key)||0,Date.parse(time)));
     }
   }
-  const additions=candidates.watched.filter(row=>!rowKeys(row).some(k=>
-    watches.has(k+"|"+iso(row.watched_at)) || (watchedLatest.get(k)||0) >= Date.parse(row.watched_at)
-  ));
+  const additions=candidates.watched.filter(row=>
+    !acknowledged.history.has(JSON.stringify(row)) &&
+    !rowKeys(row).some(k=>
+      watches.has(k+"|"+iso(row.watched_at)) || (watchedLatest.get(k)||0) >= Date.parse(row.watched_at)
+    )
+  );
   const listed=new Set([...watchMovies,...watchShows].flatMap(remoteKeys));
-  const listAdditions=candidates.watchlist.filter(row=>!overlaps(rowKeys(row),listed));
+  const listAdditions=candidates.watchlist.filter(row=>
+    !acknowledged.watchlist.has(JSON.stringify(row)) && !overlaps(rowKeys(row),listed)
+  );
   const existing=mapRemote(playback);
   const pauses=candidates.playback.filter(item=>{
+    if(acknowledged.playback.has(item.changeId+"|"+item.progress))return false;
     if(mediaKey(item.type,item.ids).some(key=>(watchedLatest.get(key)||0)>=Date.parse(item.paused_at)))return false;
     const stored=item.ids && mediaKey(item.type,item.ids).map(k=>existing.get(k)).find(Boolean);
     if(!stored)return true;
@@ -176,6 +195,7 @@ export async function planTraktSync(api,candidates) {
     return newTime>oldTime && Math.abs(Number(stored.progress||0)-item.progress)>=0.01;
   });
   return {history:additions,watchlist:listAdditions,playback:pauses,
+    unsupportedPlayback:[...(candidates.unsupportedPlayback||[])],
     existingSkipped:{history:candidates.watched.length-additions.length,
       watchlist:candidates.watchlist.length-listAdditions.length,
       playback:candidates.playback.length-pauses.length}};
@@ -186,30 +206,47 @@ function historyObject(row){return {watched_at:row.watched_at,ids:normalizedId(r
 function watchlistObject(row){return {listed_at:row.watchlisted_at,ids:normalizedId(row)};}
 
 /** Apply only after explicit user confirmation. Halt on API failure; report partial writes honestly. */
-export async function executeTraktSync(api,plan,{onProgress=()=>{}}={}) {
+export async function executeTraktSync(api,plan,{onProgress=()=>{},onConfirmed=()=>{},sleep=(ms)=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
   const report={history:0,watchlist:0,playback:0,notFound:[],errors:[]};
+  // Trakt Standard auth write rate limit: 1 request per second. Space writes
+  // before EACH later call, including scrobble/pause.
+  let nextAllowed=0;
+  const post=async(path,body)=>{
+    const remaining=Math.max(0,nextAllowed-Date.now());
+    if(remaining)await sleep(remaining);
+    nextAllowed=Date.now()+1150;
+    return api(path,{method:"POST",body});
+  };
   const deliver=async(path,kind,groups)=>{
     for(const group of chunks(groups,25)){
-      const {body}=await api(path,{method:"POST",body:kind==="history"?
+      const {body}=await post(path,kind==="history"?
         {movies:group.filter(r=>r.type==="movie").map(historyObject),
          episodes:group.filter(r=>r.type==="episode").map(historyObject)}:
         {movies:group.filter(r=>r.type==="movie").map(watchlistObject),
-         shows:group.filter(r=>r.type==="show").map(watchlistObject)}});
+         shows:group.filter(r=>r.type==="show").map(watchlistObject)});
       report.notFound.push(...(body?.not_found?.movies||[]),...(body?.not_found?.shows||[]),...(body?.not_found?.episodes||[]));
       const category=body?.added;
       if(!category || typeof category!=="object")throw new Error("Trakt did not confirm "+kind+" changes; halted to avoid repeats.");
-      report[kind]+=Number(category.movies||0)+Number(category.shows||0)+Number(category.episodes||0);
+      const accepted=Number(category.movies||0)+Number(category.shows||0)+Number(category.episodes||0);
+      report[kind]+=accepted;
+      // Only trust a complete accepted batch for retry suppression; mixed
+      // not_found responses require a fresh live comparison.
+      if(accepted===group.length && !(body?.not_found?.movies?.length||body?.not_found?.shows?.length||body?.not_found?.episodes?.length)){
+        onConfirmed(kind,group);
+      }
       onProgress({...report});
     }
   };
   await deliver("/sync/history","history",plan.history);
   await deliver("/sync/watchlist","watchlist",plan.watchlist);
   for(const item of plan.playback){
-    const {body}=await api("/scrobble/pause",{method:"POST",body:{
+    if(item.progress>=80)throw new Error("Refusing to mark unfinished media watched at "+item.progress+"%. Playback at or above 80% cannot be restored exactly via Trakt pause; retain it in the ZIP.");
+    const {body}=await post("/scrobble/pause",{
       [item.type]:{ids:item.ids},progress:item.progress,
-    }});
+    });
     if(body?.action!=="pause")throw new Error("Trakt did not confirm pause for "+item.changeId);
     report.playback++;
+    onConfirmed("playback",[item]);
     onProgress({...report});
   }
   return report;
