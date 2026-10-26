@@ -4,7 +4,7 @@ function replaceRequired(source, needle, replacement, label) {
 }
 
 export function patchExportUiSource(source) {
-  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbSeasonEpisodeIds } from "./metadata-provider.mjs";\n${source}`;
+  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbSeasonEpisodeIds } from "./metadata-provider.mjs";\nimport { createTraktAuthorization, exchangeTraktCode, makeTraktApi, buildTraktSyncCandidates, planTraktSync, executeTraktSync } from "./trakt-direct-sync.mjs";\n${source}`;
 
   patched = replaceRequired(
     patched,
@@ -20,6 +20,10 @@ let exportLookupInFlight = false;
 let exportEpisodeIds = new Map();
 let exportImportPreview = null;
 let exportEpisodeLookupInFlight = false;
+let traktConnection = null;
+let traktAuthAttempt = null;
+let traktLivePlan = null;
+let traktBusy = false;
 
 const state = {
 `,
@@ -305,6 +309,7 @@ async function onExportZipSelected(event) {
     exportExcludedChanges.clear();
     exportMetadata.clear();
     exportEpisodeIds.clear();
+    traktLivePlan = null;
     renderExportSourceSummary();
     renderExportPreview();
     updateExportReadiness();
@@ -317,6 +322,7 @@ async function onExportZipSelected(event) {
     exportExcludedChanges.clear();
     exportMetadata.clear();
     exportEpisodeIds.clear();
+    traktLivePlan = null;
     updateExportReadiness();
     setStatus("Could not read this Trakt ZIP: " + (error.message || error), "error");
   }
@@ -349,12 +355,16 @@ function renderExportPreview() {
     warning.textContent = exportMergeResult.warnings.join(" ");
     warning.hidden = exportMergeResult.warnings.length === 0;
     panel.hidden = false;
+    traktLivePlan = null;
+    updateTraktSyncUi();
     renderTraktImportReadiness();
     updateExportReadiness();
   } catch (error) {
     exportMergeResult = null;
     exportCandidates = null;
     exportImportPreview = null;
+    traktLivePlan = null;
+    updateTraktSyncUi();
     panel.hidden = false;
     $("export-warnings").hidden = false;
     $("export-warnings").textContent = "The merge preview could not be built safely: " + (error.message || error);
@@ -506,6 +516,163 @@ function downloadTraktWebImport() {
     " watchlist additions. Upload this JSON in Trakt's JSON File import option.", "success");
 }
 
+function updateTraktSyncUi() {
+  const authorized = Boolean(traktConnection && traktConnection.expiresAt>Date.now());
+  const ready = Boolean(authorized && exportMergeResult && exportArchiveTextFiles && state.remoteBefore);
+  $("trakt-authorize").disabled = traktBusy || authorized;
+  $("trakt-check").disabled = traktBusy || !ready;
+  $("trakt-commit").disabled = traktBusy || !traktLivePlan;
+  $("trakt-disconnect").disabled = traktBusy || !authorized;
+  $("trakt-live-plan").hidden = !traktLivePlan;
+  if (!authorized && !traktBusy) $("trakt-connect-status").textContent = "Not connected to Trakt.";
+}
+
+function traktCallbackToOpener() {
+  const params = new URLSearchParams(window.location.search);
+  if (!window.opener || (!params.has("code") && !params.has("error"))) return;
+  const payload = {type:"nuvio-trakt-oauth-response",code:params.get("code"),
+    state:params.get("state"),error:params.get("error")};
+  if (!params.get("state")) return;
+  window.opener.postMessage(payload,window.location.origin);
+  history.replaceState(null,"",window.location.pathname);
+  window.close();
+}
+
+async function authorizeTraktDirect() {
+  if (traktBusy) return;
+  const clientId=String($("trakt-client-id").value||"").trim();
+  // Open the popup synchronously from a user click, before awaiting crypto.subtle.
+  const popup=window.open("about:blank","nuvio-trakt-oauth","width=620,height=760");
+  if (!popup) {
+    $("trakt-connect-status").textContent="Your browser blocked the Trakt login popup. Allow popups and retry.";
+    return;
+  }
+  traktBusy=true;
+  updateTraktSyncUi();
+  try {
+    const redirectUri=window.location.origin+window.location.pathname;
+    const auth=await createTraktAuthorization({clientId,redirectUri});
+    traktAuthAttempt={...auth,popup};
+    popup.location.href=auth.url;
+    $("trakt-connect-status").textContent="Authorize the requested access in the Trakt popup. Keep this tab open.";
+  } catch(error) {
+    popup.close();
+    traktAuthAttempt=null;
+    $("trakt-connect-status").textContent="Could not start Trakt authorization: "+(error.message||error);
+    traktBusy=false;
+    updateTraktSyncUi();
+  }
+}
+
+async function receiveTraktAuth(event) {
+  if (event.origin!==window.location.origin || event.data?.type!=="nuvio-trakt-oauth-response")return;
+  const pending=traktAuthAttempt;
+  if (!pending || event.source!==pending.popup || event.data.state!==pending.state) return;
+  traktAuthAttempt=null;
+  try { pending.popup.close(); } catch {}
+  try {
+    if(event.data.error)throw Error("Trakt denied sign-in: "+event.data.error);
+    const token=await exchangeTraktCode({code:event.data.code,verifier:pending.verifier,
+      clientId:pending.clientId,redirectUri:pending.redirectUri});
+    traktConnection={clientId:pending.clientId,...token};
+    traktLivePlan=null;
+    $("trakt-connect-status").textContent="Trakt authorized for this browser tab. Compare with live Trakt before syncing.";
+  } catch(error) {
+    traktConnection=null;
+    $("trakt-connect-status").textContent="Authorization failed: "+(error.message||error)+
+      ". Check your Trakt app's CORS origin and exact callback URL.";
+  } finally {
+    traktBusy=false;
+    updateTraktSyncUi();
+  }
+}
+
+function disconnectTraktDirect() {
+  traktConnection=null;
+  traktAuthAttempt=null;
+  traktLivePlan=null;
+  $("trakt-client-id").value="";
+  $("trakt-connect-status").textContent="Disconnected. No Trakt token was saved.";
+  updateTraktSyncUi();
+}
+
+function syncCandidatesNow() {
+  if(!exportArchiveTextFiles||!exportMergeResult)throw Error("Read Nuvio data and build the merged preview first.");
+  return buildTraktSyncCandidates(exportArchiveTextFiles,exportMergeResult,{
+    excluded:exportExcludedChanges,episodeIds:exportEpisodeIds,
+  });
+}
+
+async function compareTraktDirect() {
+  if (traktBusy || !traktConnection) return;
+  traktBusy=true;
+  traktLivePlan=null;
+  updateTraktSyncUi();
+  try {
+    const candidates=syncCandidatesNow();
+    if(candidates.unresolved.length){
+      const samples=candidates.unresolved.slice(0,4).map(row=>
+        row.title+(row.season!=null?" S"+row.season+"E"+row.episode:"")+": "+row.reason).join("; ");
+      throw Error(candidates.unresolved.length+" selected items lack a safe media ID. Resolve missing episode IDs (in JSON mode) or uncheck those items first. "+samples);
+    }
+    const api=makeTraktApi(traktConnection);
+    const {body:profile}=await api("/users/settings");
+    const user=profile?.user?.username || profile?.user?.name || "your Trakt account";
+    const plan=await planTraktSync(api,candidates);
+    traktLivePlan={plan,user,sourceRevision:exportMergeResult};
+    const counts=plan;
+    $("trakt-plan-counts").textContent="Trakt account: "+user+
+      " · "+counts.history.length+" new watched events, "+
+      counts.watchlist.length+" new watchlist titles, "+
+      counts.playback.length+" newer playback positions. Already on Trakt: "+
+      counts.existingSkipped.history+" watches, "+counts.existingSkipped.watchlist+
+      " watchlist entries, "+counts.existingSkipped.playback+" resume positions.";
+    $("trakt-connect-status").textContent="Live comparison complete. Review the counts and confirm separately before any changes.";
+  } catch(error) {
+    $("trakt-connect-status").textContent="Live Trakt comparison failed: "+(error.message||error)+
+      ". No changes were sent to Trakt. Ensure your app's CORS origin is set correctly.";
+  } finally {
+    traktBusy=false;
+    updateTraktSyncUi();
+  }
+}
+
+async function commitTraktDirect() {
+  if (traktBusy || !traktConnection || !traktLivePlan) return;
+  const {plan,user}=traktLivePlan;
+  const total=plan.history.length+plan.watchlist.length+plan.playback.length;
+  if(!total){
+    $("trakt-connect-status").textContent="Nothing new to sync: Trakt already has the selected data.";
+    return;
+  }
+  const approved=window.confirm("Sync to "+user+"? Add "+plan.history.length+
+    " watched events, "+plan.watchlist.length+" watchlist titles and "+plan.playback.length+
+    " resume positions. No Trakt data will be deleted. This may not be reversible.");
+  if (!approved) return;
+  traktBusy=true;
+  traktLivePlan=null; // a plan is consumed once, even on partial error; recompare before retrying
+  updateTraktSyncUi();
+  let last={history:0,watchlist:0,playback:0};
+  try {
+    const api=makeTraktApi(traktConnection);
+    const report=await executeTraktSync(api,plan,{onProgress:progress=>{
+      last=progress;
+      $("trakt-connect-status").textContent="Trakt sync in progress: "+
+        last.history+" watches, "+last.watchlist+" watchlist, "+last.playback+" playback positions confirmed.";
+    }});
+    $("trakt-connect-status").textContent="Trakt confirmed "+report.history+" watched events, "+
+      report.watchlist+" watchlist entries and "+report.playback+" playback positions. "+
+      (report.notFound.length?report.notFound.length+" items were not found by Trakt; check and retry after correcting IDs.":"No unmatched items reported.");
+  } catch(error) {
+    $("trakt-connect-status").textContent="Sync stopped after a Trakt API error: "+(error.message||error)+
+      ". Confirmed so far: "+last.history+" watches, "+last.watchlist+" watchlist, "+
+      last.playback+" playback positions. Run Compare again before retrying; never blindly resend.";
+  } finally {
+    traktBusy=false;
+    updateTraktSyncUi();
+  }
+}
+
 function updateExportReadiness() {
   const button = $("export-button");
   if (!button) return;
@@ -616,6 +783,13 @@ $("tool-export-tab")?.addEventListener("click", () => setToolMode("export"));
 $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
+$("trakt-authorize")?.addEventListener("click", authorizeTraktDirect);
+$("trakt-check")?.addEventListener("click", compareTraktDirect);
+$("trakt-commit")?.addEventListener("click", commitTraktDirect);
+$("trakt-disconnect")?.addEventListener("click", disconnectTraktDirect);
+window.addEventListener("message",receiveTraktAuth);
+traktCallbackToOpener();
+
 for (const input of document.querySelectorAll('input[name="reverse-file-format"]')) {
   input.addEventListener("change", () => { renderTraktImportReadiness(); updateExportReadiness(); });
 }
@@ -633,6 +807,8 @@ $("profile-select")?.addEventListener("change", () => {
     exportMetadata.clear();
     exportEpisodeIds.clear();
     exportCandidates = null;
+    traktLivePlan = null;
+    updateTraktSyncUi();
     $("remote-summary").hidden = true;
     setStatus("Profile changed. Click Read Nuvio data to load the selected profile.");
   }
@@ -641,6 +817,7 @@ $("profile-select")?.addEventListener("change", () => {
   updateExportReadiness();
 });
 setToolMode("import");
+updateTraktSyncUi();
 
 window.addEventListener("beforeunload", () => {
 `,
