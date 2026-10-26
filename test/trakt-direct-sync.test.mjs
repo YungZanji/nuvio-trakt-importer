@@ -268,3 +268,34 @@ test("partial Trakt batch only acknowledges fully confirmed groups",async()=>{
   assert.equal(report.history,1);
   assert.equal(groups.length,0);
 });
+
+
+test("Trakt 2026 minute normalization prevents duplicate replay of acknowledged 139 watches",async()=>{
+  const rows=buildTraktSyncCandidates(oldFiles,merged,{episodeIds:ids});
+  // Nuvio recorded :47, Trakt stores the exact same watch as :00.
+  rows.watched[0].watched_at="2026-10-25T19:33:47.713Z";
+  let requestedPath="";
+  const api=async(path)=>{
+    if(path.startsWith("/sync/history")){
+      requestedPath=path;
+      return wrap([{type:"episode",episode:{ids:{tmdb:90011}},
+        watched_at:"2026-10-25T19:33:00.000Z"}]);
+    }
+    if(path.startsWith("/sync/watchlist/shows")||path.startsWith("/sync/playback"))return wrap([]);
+    throw Error("Unexpected "+path);
+  };
+  const plan=await planTraktSync(api,rows);
+  assert.equal(plan.history.length,0,"Trakt normalized watch must NOT be resent");
+  assert.ok(decodeURIComponent(requestedPath).includes("start_at=2026-10-25T19:33:00.000Z"),
+    "Trakt query should start at minute boundary, not at second 47");
+});
+
+test("repeated Nuvio timestamps in the same minute are deduplicated before Trakt writes",()=>{
+  const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const info={updates:new Map(),changes:{watchlist:[],playback:[],history:[
+    {id:"watched:0",entry:{type:"movie",movie,watched_at:"2026-10-26T10:10:01Z"}},
+    {id:"watched:1",entry:{type:"movie",movie,watched_at:"2026-10-26T10:10:55Z"}}
+  ]}};
+  const rows=buildTraktSyncCandidates(source,info);
+  assert.equal(rows.watched.length,1);
+});
