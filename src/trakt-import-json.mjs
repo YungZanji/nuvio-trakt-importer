@@ -75,6 +75,20 @@ function episodeIndexFor(history) {
   return map;
 }
 
+/** Reuse episode-level IDs from the historical Trakt ZIP for paused episodes too. */
+export function buildTraktEpisodeIdIndex(textFiles) {
+  if (!(textFiles instanceof Map)) return new Map();
+  const index = episodeIndexFor(relevantHistory(textFiles));
+  const output = new Map();
+  for (const [key, typed] of index) {
+    const [field, value] = Object.entries(typed)[0] || [];
+    if (!field || !field.endsWith("_id")) continue;
+    const service = field.slice(0, -3);
+    output.set(key, { [service]: service === "imdb" ? value : Number(value) });
+  }
+  return output;
+}
+
 function insertEpisodeIds(index, map) {
   for (const [key, ids] of map || []) {
     const id = typedId(ids, "episode");
