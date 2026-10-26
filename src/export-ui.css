@@ -233,3 +233,11 @@
 .export-format-card small {display:block;line-height:1.5;color:var(--muted,#a8adb7);}
 .export-episode-tool { padding:12px 2px 2px; }
 .export-episode-tool button {margin:4px 8px 8px 0;}
+
+
+.trakt-direct-sync { display:block; margin-top:24px; padding:18px; border:1px solid rgba(155,128,255,.35); border-radius:15px; background:rgba(155,128,255,.055); }
+.trakt-direct-sync label { display:block; font-weight:650; margin:12px 0 7px; }
+#trakt-client-id { display:block; width:100%; max-width:600px; }
+.trakt-direct-actions { display:flex;flex-wrap:wrap;gap:9px;margin-top:18px; }
+.trakt-direct-sync p { line-height:1.55; }
+.trakt-direct-sync button:disabled { opacity:.5; cursor:not-allowed; }

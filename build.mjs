@@ -46,7 +46,7 @@ const csp = [
   `script-src 'sha256-${sha256(js)}'`,
   `style-src 'sha256-${sha256(bundledCss)}'`,
   "font-src data:",
-  "connect-src https://api.nuvio.tv https://api-two.nuvioapp.space https://api.themoviedb.org https://v3-cinemeta.strem.io",
+  "connect-src https://api.nuvio.tv https://api-two.nuvioapp.space https://api.themoviedb.org https://v3-cinemeta.strem.io https://api.trakt.tv https://auth.trakt.tv",
   "img-src data:",
   "base-uri 'none'",
   "form-action 'none'",

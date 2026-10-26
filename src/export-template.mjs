@@ -175,6 +175,28 @@ export function patchExportTemplate(source) {
             </div>
           </div>
 
+          <section class="trakt-direct-sync" id="trakt-direct-sync" aria-labelledby="trakt-direct-title">
+            <h3 id="trakt-direct-title">Or sync selected Nuvio changes directly to Trakt</h3>
+            <p>Send only the selected new watched events and watchlist additions, plus unfinished playback positions, to your Trakt account. Nothing is written until you review the live comparison and confirm.</p>
+            <p class="substatus">Create a Trakt developer application once, then register the callback URL <code>https://yungzanji.github.io/nuvio-trakt-importer/</code> and CORS origin <code>https://yungzanji.github.io</code>. Use only its <strong>Client ID</strong>; never provide a Client Secret.</p>
+            <label for="trakt-client-id">Your Trakt application Client ID</label>
+            <input id="trakt-client-id" type="text" spellcheck="false" autocomplete="off" placeholder="Paste Trakt Client ID">
+            <p><a href="https://app.trakt.tv/oauth/applications" target="_blank" rel="noopener noreferrer">Create or view a Trakt application</a>. This is a one-time connection for this browser tab. Your token is not stored in browser storage or uploaded to us.</p>
+            <div class="trakt-direct-actions">
+              <button id="trakt-authorize" class="secondary" type="button">Authorize Trakt (PKCE)</button>
+              <button id="trakt-resolve-ids" class="secondary" type="button" disabled>Resolve missing episode IDs</button>
+              <button id="trakt-check" class="secondary" type="button" disabled>Compare with live Trakt account</button>
+              <button id="trakt-commit" type="button" disabled>Confirm and sync to Trakt</button>
+              <button id="trakt-disconnect" class="secondary" type="button" disabled>Disconnect</button>
+            </div>
+            <p id="trakt-connect-status" class="substatus" aria-live="polite">Not connected to Trakt.</p>
+            <div id="trakt-live-plan" hidden>
+              <h4>Live Trakt comparison</h4>
+              <p id="trakt-plan-counts" aria-live="polite"></p>
+              <p class="inline-warning">Trakt's pause API saves the current resume percentage, but it cannot backdate the original Nuvio pause time. Paused progress may not appear in Trakt's Next Up list. This sync does not delete existing Trakt data.</p>
+            </div>
+          </section>
+
           <button id="export-button" type="button" class="import-button" disabled>Download merged Trakt archive (.zip)</button>
           <p class="substatus">Only selected additions and updates are written to the ZIP. Unselected changes stay out; source Trakt history stays intact.</p>
           <p class="substatus">No Trakt API key or Trakt login is required. The files are generated entirely in your browser. A TMDB token is needed only for episode-ID lookups that cannot be resolved from the old Trakt archive.</p>
