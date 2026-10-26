@@ -118,3 +118,21 @@ test("API access token never appears in request bodies or query parameters",asyn
   const response=await api("/users/settings");
   assert.equal(response.body.user.username,"tester");
 });
+
+
+test("newer live Trakt watch prevents re-adding stale Nuvio history or resurrecting completed playback",async()=>{
+  const candidates=buildTraktSyncCandidates(oldFiles,merged,{episodeIds:ids});
+  const api=async(path)=>{
+    if(path.startsWith("/sync/history"))return wrap([
+      {type:"episode",episode:{ids:{tmdb:90011}},watched_at:"2026-10-27T12:00:00Z"},
+      {type:"episode",episode:{ids:{tmdb:90012}},watched_at:"2026-10-27T12:00:00Z"},
+    ]);
+    if(path.startsWith("/sync/watchlist/shows"))return wrap([]);
+    if(path.startsWith("/sync/playback"))return wrap([]);
+    throw Error(path);
+  };
+  const plan=await planTraktSync(api,candidates);
+  assert.equal(plan.history.length,0);
+  assert.equal(plan.playback.length,0);
+  assert.equal(plan.watchlist.length,1);
+});
