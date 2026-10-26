@@ -137,25 +137,32 @@ const mapRemote=(entries)=>new Map(entries.flatMap(row=>
 /** Read-only live comparison, always performed before any account writes. */
 export async function planTraktSync(api,candidates) {
   if(candidates.unresolved.length)throw new Error("Resolve or explicitly exclude "+candidates.unresolved.length+" unmatched items before syncing.");
-  const start=candidates.watched.map(r=>iso(r.watched_at)).filter(Boolean).sort()[0];
+  const start=[...candidates.watched.map(r=>iso(r.watched_at)),...candidates.playback.map(r=>iso(r.paused_at))].filter(Boolean).sort()[0];
   const historyPath="/sync/history"+(start?"?start_at="+encodeURIComponent(start):"");
   const [history,watchMovies,watchShows,playback]=await Promise.all([
-    candidates.watched.length?paginated(api,historyPath):Promise.resolve([]),
+    (candidates.watched.length||candidates.playback.length)?paginated(api,historyPath):Promise.resolve([]),
     candidates.watchlist.some(r=>r.type==="movie")?paginated(api,"/sync/watchlist/movies"):Promise.resolve([]),
     candidates.watchlist.some(r=>r.type==="show")?paginated(api,"/sync/watchlist/shows"):Promise.resolve([]),
     candidates.playback.length?paginated(api,"/sync/playback"):Promise.resolve([]),
   ]);
   const watches=new Set();
+  const watchedLatest=new Map();
   for(const item of history){
     const time=iso(item.watched_at);
     if(!time)continue;
-    for(const key of remoteKeys(item))watches.add(key+"|"+time);
+    for(const key of remoteKeys(item)){
+      watches.add(key+"|"+time);
+      watchedLatest.set(key,Math.max(watchedLatest.get(key)||0,Date.parse(time)));
+    }
   }
-  const additions=candidates.watched.filter(row=>!rowKeys(row).some(k=>watches.has(k+"|"+iso(row.watched_at))));
+  const additions=candidates.watched.filter(row=>!rowKeys(row).some(k=>
+    watches.has(k+"|"+iso(row.watched_at)) || (watchedLatest.get(k)||0) >= Date.parse(row.watched_at)
+  ));
   const listed=new Set([...watchMovies,...watchShows].flatMap(remoteKeys));
   const listAdditions=candidates.watchlist.filter(row=>!overlaps(rowKeys(row),listed));
   const existing=mapRemote(playback);
   const pauses=candidates.playback.filter(item=>{
+    if(mediaKey(item.type,item.ids).some(key=>(watchedLatest.get(key)||0)>=Date.parse(item.paused_at)))return false;
     const stored=item.ids && mediaKey(item.type,item.ids).map(k=>existing.get(k)).find(Boolean);
     if(!stored)return true;
     const oldTime=Date.parse(stored.paused_at||"")||0;
