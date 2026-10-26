@@ -166,3 +166,34 @@ export async function resolveMetadata(item, {
 }
 
 export { isMetaHubUrl, tmdbImage };
+
+
+/**
+ * Look up a REAL TMDB episode ID, not the parent TV show's ID.
+ * Only media IDs and season/episode numbers are sent to TMDB.
+ */
+export async function resolveTmdbEpisodeId(item, {
+  tmdbReadAccessToken = "",
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (!tmdbReadAccessToken) throw new Error("A TMDB read token is required to match new episode IDs.");
+  if (typeof fetchImpl !== "function") throw new Error("fetch is unavailable");
+  const season = Number(item?.season);
+  const episode = Number(item?.episode);
+  if (!Number.isInteger(season) || season < 0 || !Number.isInteger(episode) || episode < 1) {
+    throw new Error("Invalid season/episode number");
+  }
+  const showId = await resolveTmdbId({ ...item, content_type: "series" }, tmdbReadAccessToken, fetchImpl);
+  if (!showId) return null;
+  const headers = { Authorization: "Bearer " + tmdbReadAccessToken };
+  const url = TMDB_API_BASE + "/tv/" + showId + "/season/" + season + "/episode/" + episode + "?language=en-US";
+  const detail = await fetchJson(url, { fetchImpl, headers });
+  if (!numericId(detail?.id) || Number(detail.season_number) !== season || Number(detail.episode_number) !== episode) {
+    return null;
+  }
+  return {
+    ids: { tmdb: Number(detail.id) },
+    showTmdbId: showId,
+    episodeTitle: detail.name || null,
+  };
+}
