@@ -57,3 +57,21 @@ test("reverse workflow has four isolated steps and exact before-after change lis
   assert.match(reverse, /id="export-select-all"/);
   assert.match(reverse, /id="export-select-none"/);
 });
+
+
+test("reverse workflow offers archive ZIP and exact Trakt web-import JSON formats", async () => {
+  const html = patchExportTemplate(await readFile(resolve(root, "src/index.template.html"), "utf8"));
+  assert.match(html, /name="reverse-file-format" value="archive"/);
+  assert.match(html, /name="reverse-file-format" value="import"/);
+  assert.match(html, /id="export-import-full"/);
+  assert.match(html, /id="export-resolve-episodes"/);
+  assert.match(html, /id="export-import-unmatched-list"/);
+
+  const source = await transformedAppSource();
+  assert.match(source, /function downloadTraktWebImport/);
+  assert.match(source, /function renderTraktImportReadiness/);
+  assert.match(source, /resolveTmdbSeasonEpisodeIds/);
+  assert.match(source, /validated|result\.unresolved\.length/);
+  assert.match(source, /"application\/json"/);
+  assert.match(source, /excluded: exportExcludedChanges/);
+});
