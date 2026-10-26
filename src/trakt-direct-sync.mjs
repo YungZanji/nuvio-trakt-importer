@@ -69,7 +69,7 @@ export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),
       });
       continue;
     }
-    playback.push({type:isEpisode?"episode":"movie",ids,progress,paused_at:iso(entry.paused_at),changeId:change.id});
+    playback.push({type:isEpisode?"episode":"movie",ids,progress,paused_at:iso(entry.paused_at),changeId:change.id,\n      title:entry?.show?.title||entry?.movie?.title||"Unknown",\n      season:isEpisode?entry.episode?.season:null,episode:isEpisode?entry.episode?.number:null});
   }
   // /scrobble/pause rejects progress above the Trakt completion threshold.
   // Never issue /scrobble/stop instead: it would mark unfinished media as watched.
