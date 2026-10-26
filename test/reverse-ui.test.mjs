@@ -75,3 +75,22 @@ test("reverse workflow offers archive ZIP and exact Trakt web-import JSON format
   assert.match(source, /"application\/json"/);
   assert.match(source, /excluded: exportExcludedChanges/);
 });
+
+
+test("direct sync has independent Trakt authorization, live review and explicit write confirmation",async()=>{
+  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
+  for(const id of ["trakt-client-id","trakt-authorize","trakt-resolve-ids","trakt-check","trakt-commit","trakt-disconnect","trakt-live-plan"]){
+    assert.match(html,new RegExp('id="'+id+'"'));
+  }
+  const source=await transformedAppSource();
+  assert.match(source,/createTraktAuthorization/);
+  assert.match(source,/exchangeTraktCode/);
+  assert.match(source,/planTraktSync/);
+  assert.match(source,/executeTraktSync/);
+  assert.match(source,/window\.confirm\(/);
+  assert.match(source,/traktLivePlan=null/);
+  assert.match(source,/window\.opener\.postMessage/);
+  const csp=await readFile(resolve(root,"build.mjs"),"utf8");
+  assert.match(csp,/https:\/\/auth\.trakt\.tv/);
+  assert.match(csp,/https:\/\/api\.trakt\.tv/);
+});
