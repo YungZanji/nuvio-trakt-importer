@@ -184,6 +184,7 @@ export function patchExportTemplate(source) {
             <p><a href="https://app.trakt.tv/oauth/applications" target="_blank" rel="noopener noreferrer">Create or view a Trakt application</a>. This is a one-time connection for this browser tab. Your token is not stored in browser storage or uploaded to us.</p>
             <div class="trakt-direct-actions">
               <button id="trakt-authorize" class="secondary" type="button">Authorize Trakt (PKCE)</button>
+              <button id="trakt-resolve-ids" class="secondary" type="button" disabled>Resolve missing episode IDs</button>
               <button id="trakt-check" class="secondary" type="button" disabled>Compare with live Trakt account</button>
               <button id="trakt-commit" type="button" disabled>Confirm and sync to Trakt</button>
               <button id="trakt-disconnect" class="secondary" type="button" disabled>Disconnect</button>
