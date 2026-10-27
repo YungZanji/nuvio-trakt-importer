@@ -125,9 +125,9 @@ test("changing reviewed selections invalidates previous direct-sync plan and enf
   const commit=source.slice(source.indexOf("async function commitTraktDirect()"),source.indexOf("function updateExportReadiness()"));
   assert.match(commit,/revision!==traktPreviewRevision/);
   assert.match(commit,/onConfirmed:/);
-  assert.match(source,/unsupportedPlayback\.length/);
+  assert.match(source,/inferredWatched\.length/);
   const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  assert.match(html,/id="trakt-unsupported-list"/);
+  assert.match(html,/id="trakt-progress-mapping-list"/);
 });
 
 
@@ -149,4 +149,22 @@ test("direct-sync blocker review can exclude movies, shows, episodes, and playba
   assert.match(snippet,/renderExportPreview\(\)/);
   assert.match(source,/\$\("trakt-skip-unmatched-playback"\)\?\.addEventListener\("click", excludeUnmatchedTraktChanges\)/);
   assert.doesNotMatch(snippet,/\.filter\(row=>row\.kind==="playback" && row\.changeId\)/);
+});
+
+
+test("named progress conversion preview discloses watched assumptions and pause clamping with exclusions",async()=>{
+  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
+  assert.match(html,/Continue Watching conversions/);
+  assert.match(html,/id="trakt-progress-mapping"/);
+  assert.match(html,/id="trakt-progress-mapping-list"/);
+  const source=await transformedAppSource();
+  assert.match(source,/function traktMediaDescription\(item\)/);
+  assert.match(source,/function renderTraktProgressMapping\(plan,candidates\)/);
+  assert.match(source,/item\.episodeTitle/);
+  assert.match(source,/79\.99%/);
+  assert.match(source,/exportExcludedChanges\.add\(row\.item\.changeId\)/);
+  assert.match(source,/renderExportPreview\(\)/);
+  assert.match(source,/inferredWatched\.length/);
+  assert.match(source,/adjustedPlayback\.length/);
+  assert.doesNotMatch(source,/selected resume positions at ≥80% cannot be restored/);
 });
