@@ -299,3 +299,65 @@ test("repeated Nuvio timestamps in the same minute are deduplicated before Trakt
   const rows=buildTraktSyncCandidates(source,info);
   assert.equal(rows.watched.length,1);
 });
+
+
+test("VisionQuest movie/show conflict has an individually selectable change ID and is removed by exclusion", async () => {
+  const visionId="tt23112594";
+  const visionMovie={title:"VisionQuest",ids:{imdb:visionId}};
+  const visionShow={title:"VisionQuest",ids:{imdb:visionId}};
+  const source=new Map([
+    ["watched-history-1.json","[]"],
+    ["lists-watchlist.json","[]"],
+  ]);
+  const changes={updates:new Map(),changes:{
+    history:[
+      {id:"watched:4",entry:{type:"movie",movie:visionMovie,watched_at:"2026-10-25T09:00:00Z"}},
+      {id:"watched:5",entry:{type:"movie",movie,watched_at:"2026-10-25T10:00:00Z"}},
+    ],
+    watchlist:[{id:"library:7",entry:{type:"show",show:visionShow,listed_at:"2026-10-25T11:00:00Z"}}],
+    playback:[],
+  }};
+  const before=buildTraktSyncCandidates(source,changes);
+  assert.equal(before.unresolved.length,1);
+  assert.equal(before.unresolved[0].title,"VisionQuest");
+  assert.equal(before.unresolved[0].reason,"Movie/show identifier conflict");
+  assert.equal(before.unresolved[0].kind,"history");
+  assert.equal(before.unresolved[0].changeId,"watched:4");
+  const excluded=new Set(before.unresolved.filter(row=>row.changeId).map(row=>row.changeId));
+  const after=buildTraktSyncCandidates(source,changes,{excluded});
+  assert.equal(after.unresolved.length,0);
+  assert.equal(after.watched.length,1,"Unrelated movie still transfers");
+  assert.equal(after.watched[0].imdb_id,"tt1234567");
+  assert.equal(after.watchlist.length,1,"Valid VisionQuest TV show watchlist entry remains");
+  const allAllowed=buildTraktSyncCandidates(source,changes,{
+    selectedChangeIds:new Set(["watched:5","library:7"]),
+  });
+  assert.equal(allAllowed.unresolved.length,0,"Checkbox allowlist must exclude the conflict");
+  const api=async path=>{
+    if(path.startsWith("/sync/history")||path.startsWith("/sync/watchlist/shows")) return wrap([]);
+    throw Error("Unexpected path "+path);
+  };
+  const plan=await planTraktSync(api,after);
+  assert.equal(plan.history.length,1);
+  assert.equal(plan.watchlist.length,1);
+});
+
+test("watchlist movie/show collisions are individually excludable without discarding good watches",()=>{
+  const id="tt23112594";
+  const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const changes={updates:new Map(),changes:{
+    history:[{id:"watched:2",entry:{type:"episode",
+      show:{title:"VisionQuest",ids:{imdb:id}},episode:{season:1,number:1,ids:{tmdb:91234}},
+      watched_at:"2026-10-25T12:00:00Z"}}],
+    watchlist:[{id:"library:2",entry:{type:"movie",movie:{title:"VisionQuest",ids:{imdb:id}},
+      listed_at:"2026-10-25T10:00:00Z"}}],playback:[],
+  }};
+  const before=buildTraktSyncCandidates(source,changes);
+  assert.equal(before.unresolved.length,1);
+  assert.equal(before.unresolved[0].kind,"watchlist");
+  assert.equal(before.unresolved[0].changeId,"library:2");
+  const after=buildTraktSyncCandidates(source,changes,{excluded:new Set(["library:2"])});
+  assert.equal(after.unresolved.length,0);
+  assert.equal(after.watched.length,1);
+  assert.equal(after.watchlist.length,0);
+});
