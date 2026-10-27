@@ -742,7 +742,8 @@ async function compareTraktDirect() {
       const samples=candidates.unresolved.slice(0,4).map(row=>
         row.title+(row.season!=null?" S"+row.season+"E"+row.episode:"")+": "+row.reason).join("; ");
       const error = new Error(candidates.unresolved.length +
-        " selected changes lack an episode/movie ID. " + samples);
+        " selected change(s) cannot be safely matched. " + samples +
+        ". In 'Unmatched changes blocking direct sync' above, choose 'Exclude this change' or 'Exclude all unmatched changes' to remove unwanted records.");
       error.code = "MISSING_IDS";
       throw error;
     }
@@ -775,7 +776,7 @@ async function compareTraktDirect() {
   } catch(error) {
     $("trakt-connect-status").textContent="Live Trakt comparison failed: "+(error.message||error)+
       ". No changes were sent to Trakt." + (error?.code === "MISSING_IDS"
-        ? " Use Resolve missing episode IDs above or explicitly exclude unmatched changes."
+        ? " Resolve missing episode IDs if appropriate, or use the exclusion buttons above for incorrect movies, shows or playback."
         : " Check your Trakt app CORS settings only if this is a network/API error.");
   } finally {
     traktBusy=false;
