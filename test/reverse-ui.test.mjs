@@ -104,7 +104,7 @@ test("direct resolver includes Continue Watching episodes without switching to J
   assert.match(source,/const syncMissing = syncCandidatesNow\(\)\.unresolved/);
   assert.match(source,/row.reason\?\.startsWith\("Episode-specific ID required"\)/);
   assert.match(source,/\$\("trakt-resolve-ids"\)\?\.addEventListener\("click", resolveMissingTraktEpisodes\)/);
-  assert.match(source,/excludeUnmatchedTraktPlayback/);
+  assert.match(source,/excludeUnmatchedTraktChanges/);
   assert.match(source,/error\.code = "MISSING_IDS"/);
   assert.doesNotMatch(source,/Resolve missing episode IDs \(in JSON mode\)/);
   assert.doesNotMatch(source,/Ensure your app's CORS origin is set correctly/);
@@ -118,7 +118,7 @@ test("changing reviewed selections invalidates previous direct-sync plan and enf
   assert.match(preview,/traktPreviewRevision\+\+/);
   assert.match(preview,/traktLivePlan = null/);
   assert.match(preview,/updateTraktSyncUi\(\)/);
-  const select=source.slice(source.indexOf("function syncCandidatesNow()"),source.indexOf("function excludeUnmatchedTraktPlayback()"));
+  const select=source.slice(source.indexOf("function syncCandidatesNow()"),source.indexOf("function excludeUnmatchedTraktChanges()"));
   assert.match(select,/selectedChangeIds:approvedIds/);
   assert.match(select,/exportCandidates/);
   assert.match(select,/filter\(row=>!exportExcludedChanges\.has\(row\.id\)\)/);
@@ -128,4 +128,25 @@ test("changing reviewed selections invalidates previous direct-sync plan and enf
   assert.match(source,/unsupportedPlayback\.length/);
   const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
   assert.match(html,/id="trakt-unsupported-list"/);
+});
+
+
+test("direct-sync blocker review can exclude movies, shows, episodes, and playback individually",async()=>{
+  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
+  assert.match(html,/id="trakt-unmatched"/);
+  assert.match(html,/id="trakt-unmatched-list"/);
+  assert.match(html,/Exclude all unmatched changes/);
+  const source=await transformedAppSource();
+  const snippet=source.slice(source.indexOf("function renderUnmatchedTraktChanges()"),
+    source.indexOf("async function compareTraktDirect()"));
+  assert.match(snippet,/syncCandidatesNow\(\)\.unresolved/);
+  assert.match(snippet,/entry\.kind==="history"/);
+  assert.match(snippet,/entry\.kind==="watchlist"/);
+  assert.match(snippet,/entry\.reason/);
+  assert.match(snippet,/button\.textContent="Exclude this change"/);
+  assert.match(snippet,/exportExcludedChanges\.add\(entry\.changeId\)/);
+  assert.match(snippet,/exportExcludedChanges\.add\(row\.changeId\)/);
+  assert.match(snippet,/renderExportPreview\(\)/);
+  assert.match(source,/\$\("trakt-skip-unmatched-playback"\)\?\.addEventListener\("click", excludeUnmatchedTraktChanges\)/);
+  assert.doesNotMatch(snippet,/\.filter\(row=>row\.kind==="playback" && row\.changeId\)/);
 });
