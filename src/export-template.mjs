@@ -202,7 +202,7 @@ export function patchExportTemplate(source) {
               <p id="trakt-plan-counts" aria-live="polite"></p>
               <div id="trakt-progress-mapping" hidden>
                 <h4>Continue Watching conversions — review before syncing</h4>
-                <p class="substatus">The names below come from your selected Nuvio data and resolved metadata. At 80% to below 89%, the Trakt pause request is set to 79.99% to avoid its completion threshold. At 89% or above, an individual dated watched-history record is proposed, not a scrobble/stop request. Any entry already represented as watched is not uploaded a second time. These rules apply only to direct Trakt sync; the ZIP retains the original progress.</p>
+                <p class="substatus">The names below come from your selected Nuvio data and resolved metadata. If a title still shows as <code>tt...</code>, use <strong>Resolve unidentified titles</strong> in the metadata section above to look it up. At 80% to below 89%, the Trakt pause request is set to 79.99% to avoid its completion threshold. At 89% or above, an individual dated watched-history record is proposed, not a scrobble/stop request. Any entry already represented as watched is not uploaded a second time. These rules apply only to direct Trakt sync; the ZIP retains the original progress.</p>
                 <ul id="trakt-progress-mapping-list" class="export-unmatched-list"></ul>
                 <p class="inline-warning">You can exclude individual converted records below. Each exclusion also unchecks its original Continue Watching change and requires a fresh live comparison. A Trakt pause has a newly assigned timestamp; an inferred watched event uses the Nuvio last-progress timestamp as its watched date.</p>
               </div>
