@@ -365,6 +365,7 @@ function renderExportPreview() {
     warning.hidden = exportMergeResult.warnings.length === 0;
     panel.hidden = false;
     traktLivePlan = null;
+    renderUnmatchedTraktChanges();
     updateTraktSyncUi();
     renderTraktImportReadiness();
     updateExportReadiness();
@@ -554,7 +555,7 @@ function updateTraktSyncUi() {
   const ready = Boolean(authorized && exportMergeResult && exportArchiveTextFiles && state.remoteBefore);
   $("trakt-authorize").disabled = traktBusy || authorized;
   $("trakt-resolve-ids").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
-  $("trakt-skip-unmatched-playback").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
+  $("trakt-skip-unmatched-playback").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles || $("trakt-unmatched").hidden;
   $("trakt-check").disabled = traktBusy || !ready;
   $("trakt-commit").disabled = traktBusy || !traktLivePlan;
   // Freeze checked selections while comparing or writing so the UI cannot
@@ -648,18 +649,85 @@ function syncCandidatesNow() {
   });
 }
 
-function excludeUnmatchedTraktPlayback() {
-  if (!exportMergeResult || !exportArchiveTextFiles) return;
-  const missing=syncCandidatesNow().unresolved.filter(row=>row.kind==="playback" && row.changeId);
-  if (!missing.length) {
-    $("trakt-connect-status").textContent="All selected playback entries already have usable IDs.";
+// Review blockers using the same change IDs as the watchlist, history and
+// playback checkboxes; neither the ZIP nor direct sync may secretly re-include
+// a record excluded here.
+function renderUnmatchedTraktChanges() {
+  const section=$("trakt-unmatched"), list=$("trakt-unmatched-list");
+  if (!section || !list) return;
+  list.replaceChildren();
+  if (!exportArchiveTextFiles || !exportCandidates || !exportMergeResult) {
+    section.hidden=true;
+    $("trakt-skip-unmatched-playback").disabled=true;
     return;
   }
-  if (!window.confirm("Exclude "+missing.length+" unmatched Continue Watching entries from this migration? Their Nuvio records will NOT be deleted. You can re-read Nuvio and retry after identifying them.")) return;
-  for (const row of missing) exportExcludedChanges.add(row.changeId);
+  let missing;
+  try {
+    missing=syncCandidatesNow().unresolved;
+  } catch(error) {
+    section.hidden=true;
+    $("trakt-skip-unmatched-playback").disabled=true;
+    return;
+  }
+  section.hidden=!missing.length;
+  $("trakt-skip-unmatched-playback").disabled=traktBusy || exportEpisodeLookupInFlight || !missing.some(row=>row.changeId);
+  $("trakt-unmatched-status").textContent=missing.length
+    ? missing.length+" selected change(s) block sync. Exclude each unwanted entry, or choose Exclude all unmatched changes. The export preview will reflect your choices."
+    : "All selected entries can be matched.";
+  for(const entry of missing){
+    const li=document.createElement("li");
+    const kind=entry.kind==="history"?"Watched history":entry.kind==="watchlist"?"Watchlist":"Continue Watching";
+    const subject=entry.title+(entry.season == null?"":" · S"+
+      String(entry.season).padStart(2,"0")+"E"+String(entry.episode).padStart(2,"0"));
+    const description=document.createElement("span");
+    description.textContent=kind+" · "+subject+" · "+entry.reason+" ";
+    li.append(description);
+    if(entry.changeId){
+      const button=document.createElement("button");
+      button.type="button";
+      button.className="secondary";
+      button.textContent="Exclude this change";
+      button.disabled=traktBusy || exportEpisodeLookupInFlight;
+      button.setAttribute("aria-label","Exclude "+kind+" "+subject+" from migration");
+      button.addEventListener("click",()=>{
+        exportExcludedChanges.add(entry.changeId);
+        renderExportPreview();
+        $("trakt-connect-status").textContent=
+          subject+" excluded from selected changes. Compare with live Trakt again.";
+      });
+      li.append(button);
+    } else {
+      const warning=document.createElement("strong");
+      warning.textContent=" Original archival record cannot be excluded here.";
+      li.append(warning);
+    }
+    list.append(li);
+  }
+}
+
+function excludeUnmatchedTraktChanges() {
+  if (!exportMergeResult || !exportArchiveTextFiles || traktBusy) return;
+  const missing=syncCandidatesNow().unresolved;
+  const eligible=missing.filter(row=>row.changeId);
+  if(!eligible.length){
+    $("trakt-connect-status").textContent=missing.length
+      ? "Some original archival records have no selectable change ID."
+      : "All selected changes already have usable identifiers.";
+    renderUnmatchedTraktChanges();
+    return;
+  }
+  const counts={history:0,watchlist:0,playback:0};
+  for (const row of eligible) if(row.kind in counts) counts[row.kind]++;
+  const breakdown=counts.history+" watched-history, "+counts.watchlist+" watchlist, "+
+    counts.playback+" Continue Watching";
+  if(!window.confirm("Exclude "+eligible.length+" unmatched changes ("+breakdown+") from this migration?"+
+    " They will also be unchecked in the export preview. Nothing will be deleted from Nuvio or the original Trakt ZIP.")) return;
+  for (const row of eligible) exportExcludedChanges.add(row.changeId);
   renderExportPreview();
-  $("trakt-connect-status").textContent=missing.length+
-    " unmatched playback changes excluded by your choice. Other watched-history and watchlist entries remain selected. Compare with live Trakt again.";
+  const remaining=syncCandidatesNow().unresolved;
+  $("trakt-connect-status").textContent=eligible.length+" unmatched changes excluded ("+
+    breakdown+"). "+remaining.length+" unresolved selected changes remain."+
+    (remaining.length ? " Review them above." : " Compare with live Trakt again.");
 }
 
 async function compareTraktDirect() {
@@ -669,6 +737,7 @@ async function compareTraktDirect() {
   updateTraktSyncUi();
   try {
     const candidates=syncCandidatesNow();
+    renderUnmatchedTraktChanges();
     if(candidates.unresolved.length){
       const samples=candidates.unresolved.slice(0,4).map(row=>
         row.title+(row.season!=null?" S"+row.season+"E"+row.episode:"")+": "+row.reason).join("; ");
@@ -874,7 +943,7 @@ $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
 $("trakt-authorize")?.addEventListener("click", authorizeTraktDirect);
 $("trakt-resolve-ids")?.addEventListener("click", resolveMissingTraktEpisodes);
-$("trakt-skip-unmatched-playback")?.addEventListener("click", excludeUnmatchedTraktPlayback);
+$("trakt-skip-unmatched-playback")?.addEventListener("click", excludeUnmatchedTraktChanges);
 $("trakt-check")?.addEventListener("click", compareTraktDirect);
 $("trakt-commit")?.addEventListener("click", commitTraktDirect);
 $("trakt-disconnect")?.addEventListener("click", disconnectTraktDirect);
