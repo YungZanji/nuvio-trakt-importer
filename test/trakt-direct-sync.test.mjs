@@ -184,30 +184,93 @@ test("pause-only episodes are included in ID resolution rather than silently rem
 });
 
 
-test("Trakt pause threshold: 84.7152% is never sent as stop or pause or marked watched", async () => {
+test("84.7152% maps to safe 79.99% pause, 89%+ converts into dated watched history", async () => {
   const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
   const merged={updates:new Map(),changes:{history:[],watchlist:[],playback:[
     {id:"progress:0",action:"add",entry:{type:"movie",movie,progress:84.7152,paused_at:"2026-10-26T01:00:00Z"}},
-    {id:"progress:1",action:"add",entry:{type:"movie",movie:{title:"Another",ids:{tmdb:91}},progress:42.25,paused_at:"2026-10-26T02:00:00Z"}},
+    {id:"progress:1",action:"add",entry:{type:"movie",movie:{title:"Almost Finished",ids:{tmdb:91}},progress:89,paused_at:"2026-10-26T02:00:00Z"}},
+    {id:"progress:2",action:"add",entry:{type:"movie",movie:{title:"Completed",ids:{tmdb:92}},progress:100,paused_at:"2026-10-26T03:00:00Z"}},
+    {id:"progress:3",action:"add",entry:{type:"movie",movie:{title:"Unchanged",ids:{tmdb:93}},progress:42.25,paused_at:"2026-10-26T04:00:00Z"}},
   ]}};
   const candidates=buildTraktSyncCandidates(source,merged);
-  assert.equal(candidates.playback.length,1);
-  assert.equal(candidates.playback[0].progress,42.25);
-  assert.equal(candidates.unsupportedPlayback.length,1);
-  assert.equal(candidates.unsupportedPlayback[0].progress,84.7152);
+  assert.deepEqual(candidates.playback.map(row=>row.progress),[79.99,42.25]);
+  assert.deepEqual(candidates.adjustedPlayback.map(row=>row.originalProgress),[84.7152]);
+  assert.equal(candidates.inferredWatched.length,2);
+  assert.deepEqual(candidates.inferredWatched.map(row=>row.watched_at),
+    ["2026-10-26T02:00:00.000Z","2026-10-26T03:00:00.000Z"]);
+  assert.deepEqual(candidates.inferredWatched.map(row=>row.title),["Almost Finished","Completed"]);
+  assert.equal(candidates.unsupportedPlayback.length,0);
   const calls=[];
   const api=async(path,opts={})=>{
     calls.push({path,opts});
     if(path.startsWith("/sync/history")||path.startsWith("/sync/playback"))return wrap([]);
+    if(path==="/sync/history"&&opts.method==="POST")return wrap({added:{movies:2,episodes:0}});
     if(path==="/scrobble/pause")return wrap({action:"pause"});
     throw new Error("Unexpected call "+path);
   };
-  const plan=await planTraktSync(api,candidates);
-  assert.equal(plan.unsupportedPlayback.length,1);
-  const result=await executeTraktSync(api,plan);
-  assert.equal(result.playback,1);
-  assert.equal(calls.filter(c=>c.path==="/scrobble/pause").length,1);
+  const apiFixed=async(path,opts={})=>{
+    if(path==="/sync/history"&&opts.method==="POST") {
+      calls.push({path,opts});
+      return wrap({added:{movies:2,episodes:0}});
+    }
+    return api(path,opts);
+  };
+  const plan=await planTraktSync(apiFixed,candidates);
+  assert.equal(plan.inferredWatched.length,2);
+  assert.equal(plan.adjustedPlayback.length,1);
+  const result=await executeTraktSync(apiFixed,plan,{sleep:async()=>{}});
+  assert.equal(result.history,2);
+  assert.equal(result.playback,2);
+  const paused=calls.filter(c=>c.path==="/scrobble/pause");
+  assert.deepEqual(paused.map(c=>c.opts.body.progress),[79.99,42.25]);
   assert.equal(calls.some(c=>c.path==="/scrobble/stop"),false);
+  const submitted=calls.find(c=>c.path==="/sync/history"&&c.opts.method==="POST");
+  assert.equal(submitted.opts.body.movies.length,2);
+  assert.equal(submitted.opts.body.movies[0].watched_at,"2026-10-26T02:00:00.000Z");
+});
+
+test("88.999% is paused, 89% and 100% watched; no automatic history when explicit Nuvio history exists",()=>{
+  const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const entries=[88.999,89,99.99,100].map((progress,i)=>({
+    id:"progress:"+i,action:"add",entry:{type:"episode",
+      show:{title:"Black Clover",ids:{imdb:"tt7441658"}},
+      episode:{season:1,number:i+1,ids:{tmdb:20001+i}},
+      progress,paused_at:"2026-10-26T01:0"+i+":00Z"}
+  }));
+  const merged={updates:new Map(),changes:{history:[],watchlist:[],playback:entries}};
+  const mapped=buildTraktSyncCandidates(source,merged);
+  assert.equal(mapped.adjustedPlayback.length,1);
+  assert.equal(mapped.adjustedPlayback[0].progress,79.99);
+  assert.deepEqual(mapped.inferredWatched.map(item=>item.episode),[2,3,4]);
+  const withHistory={...merged,changes:{...merged.changes,
+    history:[{id:"watched:0",entry:{type:"episode",show:entries[3].entry.show,
+      episode:entries[3].entry.episode,watched_at:"2026-10-26T01:03:00Z"}}]}};
+  const protectedItem=buildTraktSyncCandidates(source,withHistory,{
+    excluded:new Set(["watched:0"]),
+  });
+  assert.equal(protectedItem.inferredWatched.some(item=>item.episode===4),false);
+  assert.equal(protectedItem.alreadyWatchedProgress.length,1);
+});
+
+test("direct-sync checkbox exclusions apply to inferred watched and clamped pauses",()=>{
+  const source=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const merged={updates:new Map(),changes:{history:[],watchlist:[],playback:[
+    {id:"progress:8",action:"add",entry:{type:"movie",movie,progress:90,
+      paused_at:"2026-10-26T01:00:00Z"}},
+    {id:"progress:9",action:"add",entry:{type:"movie",movie:{title:"Other",ids:{tmdb:200}},progress:85,
+      paused_at:"2026-10-26T02:00:00Z"}},
+  ]}};
+  const candidates=buildTraktSyncCandidates(source,merged,{
+    selectedChangeIds:new Set(["progress:9"]),
+  });
+  assert.equal(candidates.inferredWatched.length,0);
+  assert.equal(candidates.playback.length,1);
+  assert.equal(candidates.playback[0].changeId,"progress:9");
+  const remaining=buildTraktSyncCandidates(source,merged,{
+    excluded:new Set(["progress:9"]),
+  });
+  assert.equal(remaining.inferredWatched.length,1);
+  assert.equal(remaining.playback.length,0);
 });
 
 test("direct-sync explicit UI allowlist wins over old merged selections", () => {
@@ -254,7 +317,7 @@ test("Trakt sync refuses >=80% pause even if a malformed older plan slips throug
   const api=async()=>{throw Error("No API write expected");};
   await assert.rejects(executeTraktSync(api,{history:[],watchlist:[],playback:[
     {changeId:"progress:0",type:"movie",ids:{imdb:"tt1234567"},progress:84.7152}
-  ]}),/cannot be restored exactly/);
+  ]}),/Refusing unsafe pause/);
 });
 
 test("partial Trakt batch only acknowledges fully confirmed groups",async()=>{

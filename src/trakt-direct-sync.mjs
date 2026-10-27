@@ -22,6 +22,9 @@ const watchMinute = (value) => {
   const ms=Date.parse(value||"");
   return Number.isFinite(ms)?new Date(Math.floor(ms/60000)*60000).toISOString():null;
 };
+// These rules apply ONLY to direct Trakt sync. The ZIP always keeps exact Nuvio progress.
+export const TRAKT_WATCHED_PROGRESS = 89;
+export const TRAKT_SAFE_PAUSE_PROGRESS = 79.99;
 const sortDedupe = (rows) => {
   const map = new Map();
   for(const row of rows){
@@ -58,33 +61,71 @@ export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),
   const watched=sortDedupe(converted.rows.filter(r=>r.watched_at));
   const watchlist=sortDedupe(converted.rows.filter(r=>r.watchlisted_at));
   const playback=[];
+  const inferredWatched=[];
   const unresolved=[...converted.unresolved];
-  for(const change of merged.changes.playback || []){
-    if(effectiveExcluded.has(change.id)||change.action==="clear")continue; // remote deletions never performed
-    const entry=change.entry, progress=Number(entry?.progress);
-    if(!(progress>0&&progress<100)||!iso(entry?.paused_at))continue;
-    const isEpisode=entry.type==="episode";
+  const alreadyWatchedProgress=[];
+  // Respect existing watched status, including any history entry the user unchecked.
+  // A progress-only completion must never override a manually excluded history item.
+  const watchedMediaKeys = new Set();
+  for (const change of merged.changes.history || []) {
+    const entry=change.entry;
+    const isEpisode=entry?.type==="episode";
     const ids=isEpisode?episodePlaybackIds(entry,effectiveEpisodeIds):entry?.movie?.ids;
-    if(!ids || !mediaKey(isEpisode?"episode":"movie",ids).length){
+    for (const key of mediaKey(isEpisode?"episode":"movie",ids)) watchedMediaKeys.add(key);
+  }
+  // A Trakt scrobble/pause at 80% or more fails with 422. For 80%-<89% we
+  // intentionally approximate to 79.99%. For 89%-100% user opted to mark
+  // watched: add dated history via /sync/history, NEVER /scrobble/stop.
+  for(const change of merged.changes.playback || []){
+    if(effectiveExcluded.has(change.id)||change.action==="clear")continue;
+    const entry=change.entry, progress=Number(entry?.progress);
+    if(!(progress>0&&progress<=100)||!iso(entry?.paused_at))continue;
+    const isEpisode=entry.type==="episode", type=isEpisode?"episode":"movie";
+    const ids=isEpisode?episodePlaybackIds(entry,effectiveEpisodeIds):entry?.movie?.ids;
+    const title=entry?.show?.title||entry?.movie?.title||"Unknown title";
+    const episodeTitle=isEpisode?entry?.episode?.title||null:null;
+    const descriptor={
+      type,ids,originalProgress:progress,paused_at:iso(entry.paused_at),
+      changeId:change.id,title,episodeTitle,
+      season:isEpisode?entry.episode?.season:null,
+      episode:isEpisode?entry.episode?.number:null,
+    };
+    if(!ids || !mediaKey(type,ids).length){
       unresolved.push({
         changeId:change.id,kind:"playback",
         reason:isEpisode?"Episode-specific ID required for pause sync":"Movie ID required for pause sync",
-        title:entry?.show?.title||entry?.movie?.title||"Unknown",
-        showIds:isEpisode?(entry?.show?.ids||null):null,
+        title,showIds:isEpisode?(entry?.show?.ids||null):null,
         season:entry?.episode?.season??null,episode:entry?.episode?.number??null,
       });
       continue;
     }
-    playback.push({type:isEpisode?"episode":"movie",ids,progress,paused_at:iso(entry.paused_at),changeId:change.id,
-      title:entry?.show?.title||entry?.movie?.title||"Unknown",
-      season:isEpisode?entry.episode?.season:null,episode:isEpisode?entry.episode?.number:null});
+    if(progress>=TRAKT_WATCHED_PROGRESS){
+      if(mediaKey(type,ids).some(key=>watchedMediaKeys.has(key))){
+        alreadyWatchedProgress.push({...descriptor,reason:"New watched-history entry already represents this item"});
+        continue;
+      }
+      const id=Object.entries(ids).find(([key,value])=>
+        ["trakt","tmdb","imdb","tvdb"].includes(key) && value!=null);
+      if(!id)continue;
+      inferredWatched.push({
+        [id[0]+"_id"]:String(id[1]),
+        type,watched_at:iso(entry.paused_at),
+        inferredFromProgress:true,...descriptor,
+      });
+    } else {
+      playback.push({
+        ...descriptor,progress:progress>=80?TRAKT_SAFE_PAUSE_PROGRESS:progress,
+        adjustedFromProgress:progress>=80,
+      });
+    }
   }
-  // /scrobble/pause rejects progress above the Trakt completion threshold.
-  // Never issue /scrobble/stop instead: it would mark unfinished media as watched.
-  // Keep these in the ZIP backup with their real percentage, and disclose them.
-  const unsupportedPlayback=playback.filter(item=>item.progress>=80);
-  const safePlayback=playback.filter(item=>item.progress<80);
-  return { watched,watchlist,playback:safePlayback,unsupportedPlayback,unresolved };
+  const addedHistory=sortDedupe([...watched,...inferredWatched]);
+  return {
+    watched:addedHistory,watchlist,playback,unresolved,
+    inferredWatched,alreadyWatchedProgress,
+    adjustedPlayback:playback.filter(item=>item.adjustedFromProgress),
+    unsupportedPlayback:[],
+  };
 }
 
 function randomBase64Url(bytes=32) {
@@ -205,7 +246,10 @@ export async function planTraktSync(api,candidates,{acknowledged={history:new Se
     return newTime>oldTime && Math.abs(Number(stored.progress||0)-item.progress)>=0.01;
   });
   return {history:additions,watchlist:listAdditions,playback:pauses,
-    unsupportedPlayback:[...(candidates.unsupportedPlayback||[])],
+    inferredWatched:additions.filter(item=>item.inferredFromProgress),
+    adjustedPlayback:pauses.filter(item=>item.adjustedFromProgress),
+    alreadyWatchedProgress:candidates.alreadyWatchedProgress||[],
+    unsupportedPlayback:[],
     existingSkipped:{history:candidates.watched.length-additions.length,
       watchlist:candidates.watchlist.length-listAdditions.length,
       playback:candidates.playback.length-pauses.length}};
@@ -250,7 +294,7 @@ export async function executeTraktSync(api,plan,{onProgress=()=>{},onConfirmed=(
   await deliver("/sync/history","history",plan.history);
   await deliver("/sync/watchlist","watchlist",plan.watchlist);
   for(const item of plan.playback){
-    if(item.progress>=80)throw new Error("Refusing to mark unfinished media watched at "+item.progress+"%. Playback at or above 80% cannot be restored exactly via Trakt pause; retain it in the ZIP.");
+    if(item.progress>=80)throw new Error("Refusing unsafe pause at "+item.progress+"%. The direct-sync candidate should have been mapped to 79.99% or watched before applying.");
     const {body}=await post("/scrobble/pause",{
       [item.type]:{ids:item.ids},progress:item.progress,
     });

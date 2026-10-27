@@ -730,6 +730,57 @@ function excludeUnmatchedTraktChanges() {
     (remaining.length ? " Review them above." : " Compare with live Trakt again.");
 }
 
+function traktMediaDescription(item) {
+  const base=String(item.title||"Unidentified media");
+  const segment=item.type==="episode" && item.season!=null && item.episode!=null
+    ? " · S"+String(item.season).padStart(2,"0")+"E"+String(item.episode).padStart(2,"0")
+    : "";
+  return base+segment+(item.episodeTitle?" · "+item.episodeTitle:"");
+}
+
+function renderTraktProgressMapping(plan,candidates) {
+  const wrapper=$("trakt-progress-mapping"),list=$("trakt-progress-mapping-list");
+  if(!wrapper || !list)return;
+  list.replaceChildren();
+  const inferredNew=new Set((plan.inferredWatched||[]).map(item=>item.changeId));
+  const pauseNew=new Set((plan.adjustedPlayback||[]).map(item=>item.changeId));
+  const records=[
+    ...(candidates.adjustedPlayback||[]).map(item=>({
+      item,display:"Pause "+item.originalProgress.toFixed(2)+"% → "+item.progress.toFixed(2)+"%",
+      action:pauseNew.has(item.changeId)?"Will sync":"Already present/newer on Trakt — skipped",
+    })),
+    ...(candidates.inferredWatched||[]).map(item=>({
+      item,display:"Watched (assumed from "+item.originalProgress.toFixed(2)+"%)",
+      action:inferredNew.has(item.changeId)?"Will add dated watched event":"Already present/newer on Trakt — skipped",
+    })),
+    ...(candidates.alreadyWatchedProgress||[]).map(item=>({
+      item,display:"Already watched in Nuvio ("+item.originalProgress.toFixed(2)+"%)",
+      action:"Nuvio watched-history entry takes precedence — no duplicate",
+    })),
+  ].sort((a,b)=>Number(a.item.changeId?.split(":")[1]||0)-Number(b.item.changeId?.split(":")[1]||0));
+  wrapper.hidden=!records.length;
+  for(const row of records){
+    const li=document.createElement("li");
+    const info=document.createElement("span");
+    info.textContent=traktMediaDescription(row.item)+" — "+row.display+" · "+row.action+" ";
+    li.append(info);
+    const button=document.createElement("button");
+    button.type="button";
+    button.className="secondary";
+    button.textContent="Exclude";
+    button.disabled=traktBusy;
+    button.setAttribute("aria-label","Exclude "+traktMediaDescription(row.item)+" from direct sync");
+    button.addEventListener("click",()=>{
+      exportExcludedChanges.add(row.item.changeId);
+      renderExportPreview();
+      $("trakt-connect-status").textContent=traktMediaDescription(row.item)+
+        " excluded from proposed changes. Recompare with live Trakt before syncing.";
+    });
+    li.append(button);
+    list.append(li);
+  }
+}
+
 async function compareTraktDirect() {
   if (traktBusy || !traktConnection) return;
   traktBusy=true;
@@ -755,23 +806,16 @@ async function compareTraktDirect() {
     if(comparisonRevision!==traktPreviewRevision)
       throw Error("The review selections changed during comparison. Recompare the selected changes.");
     traktLivePlan={plan,user,revision:comparisonRevision};
+    renderTraktProgressMapping(plan,candidates);
     const counts=plan;
     $("trakt-plan-counts").textContent="Trakt account: "+user+
-      " · "+counts.history.length+" new watched events, "+
-      counts.watchlist.length+" new watchlist titles, "+
-      counts.playback.length+" newer playback positions. Already on Trakt: "+
-      counts.existingSkipped.history+" watches, "+counts.existingSkipped.watchlist+
-      " watchlist entries, "+counts.existingSkipped.playback+" resume positions. "+
-      counts.unsupportedPlayback.length+" selected resume positions at ≥80% cannot be restored accurately using Trakt's pause API and will be skipped.";
-    const omittedList=$("trakt-unsupported-list");
-    omittedList.replaceChildren();
-    for(const item of counts.unsupportedPlayback){
-      const li=document.createElement("li");
-      li.textContent=item.type+" · "+item.progress.toFixed(2)+"% · "+item.changeId+
-        " (preserved in ZIP, not marked watched)";
-      omittedList.append(li);
-    }
-    $("trakt-unsupported").hidden=!counts.unsupportedPlayback.length;
+      " · "+plan.history.length+" new watched events ("+plan.inferredWatched.length+
+      " inferred from ≥89% playback), "+plan.watchlist.length+
+      " new watchlist titles, "+plan.playback.length+" resume positions ("+
+      plan.adjustedPlayback.length+" adjusted to 79.99%). Already on Trakt or newer there: "+
+      plan.existingSkipped.history+" watches, "+plan.existingSkipped.watchlist+
+      " watchlist entries, "+plan.existingSkipped.playback+" resume positions. "+
+      "Every conversion below is traceable to a checked Nuvio change.";
     $("trakt-connect-status").textContent="Live comparison complete. Review the counts and confirm separately before any changes.";
   } catch(error) {
     $("trakt-connect-status").textContent="Live Trakt comparison failed: "+(error.message||error)+
@@ -800,8 +844,9 @@ async function commitTraktDirect() {
   }
   const approved=window.confirm("Sync to "+user+"? Add "+plan.history.length+
     " watched events, "+plan.watchlist.length+" watchlist titles and "+plan.playback.length+
-    " resume positions. "+plan.unsupportedPlayback.length+
-    " resume positions at 80% or above will NOT be synced or marked watched, but remain in your ZIP backup. No Trakt data will be deleted. This may not be reversible.");
+    " resume positions. This INCLUDES "+plan.inferredWatched.length+
+    " inferred watched entries from Nuvio progress ≥89%, and "+
+    plan.adjustedPlayback.length+" resume positions reduced to 79.99% because their original progress was between 80% and 89%. The backup ZIP retains the exact original percentages. No existing Trakt records will be deleted. This may not be reversible.");
   if (!approved) return;
   traktBusy=true;
   traktLivePlan=null; // a plan is consumed once, even on partial error; recompare before retrying
