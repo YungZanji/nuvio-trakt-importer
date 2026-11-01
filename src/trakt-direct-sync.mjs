@@ -81,7 +81,7 @@ export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),
   for(const change of merged.changes.playback || []){
     if(effectiveExcluded.has(change.id)||change.action==="clear")continue;
     const entry=change.entry, progress=Number(entry?.progress);
-    if(!(progress>0&&progress<=100)||!iso(entry?.paused_at))continue;
+    if(!(progress>=0&&progress<=100)||!iso(entry?.paused_at))continue;
     const isEpisode=entry.type==="episode", type=isEpisode?"episode":"movie";
     const ids=isEpisode?episodePlaybackIds(entry,effectiveEpisodeIds):entry?.movie?.ids;
     const title=entry?.show?.title||entry?.movie?.title||"Unknown title";
