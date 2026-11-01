@@ -25,6 +25,8 @@ const watchMinute = (value) => {
 // These rules apply ONLY to direct Trakt sync. The ZIP always keeps exact Nuvio progress.
 export const TRAKT_WATCHED_PROGRESS = 89;
 export const TRAKT_SAFE_PAUSE_PROGRESS = 79.99;
+// Use 2%, comfortably above Trakt's documented 1% scrobble minimum.
+export const TRAKT_MIN_PAUSE_PROGRESS = 2;
 const sortDedupe = (rows) => {
   const map = new Map();
   for(const row of rows){
@@ -113,9 +115,12 @@ export function buildTraktSyncCandidates(textFiles, merged, {excluded=new Set(),
         inferredFromProgress:true,...descriptor,
       });
     } else {
+      const adjustment=progress>=80?"high":progress<1?"low":null;
+      const mapped=adjustment==="high"?TRAKT_SAFE_PAUSE_PROGRESS:
+        adjustment==="low"?TRAKT_MIN_PAUSE_PROGRESS:progress;
       playback.push({
-        ...descriptor,progress:progress>=80?TRAKT_SAFE_PAUSE_PROGRESS:progress,
-        adjustedFromProgress:progress>=80,
+        ...descriptor,progress:mapped,adjustment,
+        adjustedFromProgress:Boolean(adjustment),
       });
     }
   }
@@ -199,8 +204,19 @@ function remoteKeys(entry) {
   return mediaKey(type,obj?.ids);
 }
 function overlaps(keys,set){return keys.some(key=>set.has(key));}
-const mapRemote=(entries)=>new Map(entries.flatMap(row=>
-  remoteKeys(row).map(key=>[key,row])));
+// The playback endpoint can contain multiple entries for an item. Retain its
+// latest server pause so an old record cannot cause us to overwrite newer state.
+const mapRemote=(entries)=>{
+  const map=new Map();
+  for(const row of entries){
+    for(const key of remoteKeys(row)){
+      const existing=map.get(key);
+      if(!existing || (Date.parse(row?.paused_at||"")||0) >
+        (Date.parse(existing?.paused_at||"")||0)) map.set(key,row);
+    }
+  }
+  return map;
+};
 
 /** Read-only live comparison, always performed before any account writes. */
 export async function planTraktSync(api,candidates,{acknowledged={history:new Set(),watchlist:new Set(),playback:new Set()}}={}) {
@@ -239,11 +255,17 @@ export async function planTraktSync(api,candidates,{acknowledged={history:new Se
   const pauses=candidates.playback.filter(item=>{
     if(acknowledged.playback.has(item.changeId+"|"+item.progress))return false;
     if(mediaKey(item.type,item.ids).some(key=>(watchedLatest.get(key)||0)>=Date.parse(item.paused_at)))return false;
-    const stored=item.ids && mediaKey(item.type,item.ids).map(k=>existing.get(k)).find(Boolean);
+    const stored=item.ids && mediaKey(item.type,item.ids)
+      .map(k=>existing.get(k)).filter(Boolean)
+      .sort((a,b)=>(Date.parse(b.paused_at||"")||0)-(Date.parse(a.paused_at||"")||0))[0];
     if(!stored)return true;
+    // Existing progress at the same percentage must never be sent again.
+    if(Math.abs(Number(stored.progress||0)-item.progress)<0.01)return false;
+    // A pause made on Trakt after the original Nuvio timestamp wins, even
+    // when its percentage differs (critical for reloading after partial sync).
     const oldTime=Date.parse(stored.paused_at||"")||0;
     const newTime=Date.parse(item.paused_at||"")||0;
-    return newTime>oldTime && Math.abs(Number(stored.progress||0)-item.progress)>=0.01;
+    return newTime>oldTime;
   });
   return {history:additions,watchlist:listAdditions,playback:pauses,
     inferredWatched:additions.filter(item=>item.inferredFromProgress),
@@ -261,7 +283,7 @@ function watchlistObject(row){return {listed_at:row.watchlisted_at,ids:normalize
 
 /** Apply only after explicit user confirmation. Halt on API failure; report partial writes honestly. */
 export async function executeTraktSync(api,plan,{onProgress=()=>{},onConfirmed=()=>{},sleep=(ms)=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
-  const report={history:0,watchlist:0,playback:0,notFound:[],errors:[]};
+  const report={history:0,watchlist:0,playback:0,notFound:[],errors:[],playbackRejected:[]};
   // Trakt Standard auth write rate limit: 1 request per second. Space writes
   // before EACH later call, including scrobble/pause.
   let nextAllowed=0;
@@ -294,13 +316,37 @@ export async function executeTraktSync(api,plan,{onProgress=()=>{},onConfirmed=(
   await deliver("/sync/history","history",plan.history);
   await deliver("/sync/watchlist","watchlist",plan.watchlist);
   for(const item of plan.playback){
-    if(item.progress>=80)throw new Error("Refusing unsafe pause at "+item.progress+"%. The direct-sync candidate should have been mapped to 79.99% or watched before applying.");
-    const {body}=await post("/scrobble/pause",{
-      [item.type]:{ids:item.ids},progress:item.progress,
-    });
-    if(body?.action!=="pause")throw new Error("Trakt did not confirm pause for "+item.changeId);
-    report.playback++;
-    onConfirmed("playback",[item]);
+    if(item.progress<1 || item.progress>=80){
+      throw new Error("Unsafe pause progress "+item.progress+
+        "% escaped validation. Aborted before sending this playback request.");
+    }
+    try{
+      const {body}=await post("/scrobble/pause",{
+        [item.type]:{ids:item.ids},progress:item.progress,
+      });
+      if(body?.action!=="pause"){
+        const invalid=new Error("Trakt returned action "+String(body?.action||"unknown")+
+          " instead of pause for "+item.changeId);
+        invalid.status=422;
+        throw invalid;
+      }
+      report.playback++;
+      onConfirmed("playback",[item]);
+    }catch(error){
+      // A 422 is an individual-item validation rejection. Log the item and
+      // continue; auth, rate limit, network and server errors must still halt.
+      if(error?.status!==422){
+        error.failedItem={changeId:item.changeId,title:item.title,
+          season:item.season,episode:item.episode,progress:item.progress};
+        throw error;
+      }
+      const rejected={changeId:item.changeId,title:item.title||"Unknown media",
+        type:item.type,season:item.season??null,episode:item.episode??null,
+        progress:item.progress,originalProgress:item.originalProgress??item.progress,
+        message:String(error.message||error)};
+      report.playbackRejected.push(rejected);
+      report.errors.push(rejected);
+    }
     onProgress({...report});
   }
   return report;
