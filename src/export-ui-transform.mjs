@@ -4,7 +4,7 @@ function replaceRequired(source, needle, replacement, label) {
 }
 
 export function patchExportUiSource(source) {
-  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbSeasonEpisodeIds } from "./metadata-provider.mjs";\nimport { createTraktAuthorization, exchangeTraktCode, makeTraktApi, buildTraktSyncCandidates, planTraktSync, executeTraktSync } from "./trakt-direct-sync.mjs";\n${source}`;
+  let patched = `import { zipSync, strToU8 } from "fflate";\nimport { buildMergedTraktExport } from "./trakt-exporter.mjs";\nimport { buildTraktImportJson } from "./trakt-import-json.mjs";\nimport { resolveTmdbSeasonEpisodeIds } from "./metadata-provider.mjs";\n${source}`;
 
   patched = replaceRequired(
     patched,
@@ -20,14 +20,6 @@ let exportLookupInFlight = false;
 let exportEpisodeIds = new Map();
 let exportImportPreview = null;
 let exportEpisodeLookupInFlight = false;
-let traktConnection = null;
-let traktAuthAttempt = null;
-let traktLivePlan = null;
-let traktBusy = false;
-let traktPreviewRevision = 0;
-// Retain only successful Trakt acknowledgements in memory so an API error
-// cannot immediately re-offer the same confirmed 139 watched events.
-let traktConfirmedLedger = { history:new Set(), watchlist:new Set(), playback:new Set() };
 
 const state = {
 `,
@@ -313,7 +305,6 @@ async function onExportZipSelected(event) {
     exportExcludedChanges.clear();
     exportMetadata.clear();
     exportEpisodeIds.clear();
-    traktLivePlan = null;
     renderExportSourceSummary();
     renderExportPreview();
     updateExportReadiness();
@@ -326,18 +317,12 @@ async function onExportZipSelected(event) {
     exportExcludedChanges.clear();
     exportMetadata.clear();
     exportEpisodeIds.clear();
-    traktLivePlan = null;
     updateExportReadiness();
     setStatus("Could not read this Trakt ZIP: " + (error.message || error), "error");
   }
 }
 
 function renderExportPreview() {
-  // A checkbox, profile or metadata change must invalidate any earlier live
-  // write plan. This was the cause of deselected items being syncable.
-  traktPreviewRevision++;
-  traktLivePlan = null;
-  updateTraktSyncUi();
   const panel = $("export-preview");
   if (!panel) return;
   if (!exportArchiveTextFiles || !state.remoteBefore) {
@@ -364,17 +349,12 @@ function renderExportPreview() {
     warning.textContent = exportMergeResult.warnings.join(" ");
     warning.hidden = exportMergeResult.warnings.length === 0;
     panel.hidden = false;
-    traktLivePlan = null;
-    renderUnmatchedTraktChanges();
-    updateTraktSyncUi();
     renderTraktImportReadiness();
     updateExportReadiness();
   } catch (error) {
     exportMergeResult = null;
     exportCandidates = null;
     exportImportPreview = null;
-    traktLivePlan = null;
-    updateTraktSyncUi();
     panel.hidden = false;
     $("export-warnings").hidden = false;
     $("export-warnings").textContent = "The merge preview could not be built safely: " + (error.message || error);
@@ -429,28 +409,15 @@ function renderTraktImportReadiness() {
 }
 
 async function resolveMissingTraktEpisodes() {
-  if (exportEpisodeLookupInFlight || !exportArchiveTextFiles || !exportMergeResult) return;
+  if (exportEpisodeLookupInFlight || !exportImportPreview) return;
   const field = $("export-metadata-token");
   let token = String(field?.value || "").trim();
   if (field) field.value = "";
   if (!token) {
     $("export-episode-status").textContent = "Paste your TMDB API Read Access Token above, then click Resolve missing episode IDs.";
-    $("trakt-connect-status").textContent = "A TMDB API Read Access Token is needed to identify the remaining paused episodes. Paste it in Resolve missing titles and episode names above, then try again.";
     return;
   }
-  // Include the new watched events AND unfinished episode playback records.
-  // The old JSON-only resolver missed the latter and blocked direct sync.
-  const syncMissing = syncCandidatesNow().unresolved;
-  const fullImportMissing = $("export-import-full")?.checked && exportImportPreview
-    ? exportImportPreview.unresolved : [];
-  const missing = [...syncMissing, ...fullImportMissing].filter((row) =>
-    row.showIds && row.season != null && row.episode != null &&
-    row.reason?.startsWith("Episode-specific ID required"));
-  if (!missing.length) {
-    $("export-episode-status").textContent = "All selected watched and Continue Watching episodes have matching IDs.";
-    $("trakt-connect-status").textContent = "Episode IDs are ready. Compare with live Trakt to continue.";
-    return;
-  }
+  const missing = exportImportPreview.unresolved.filter((row) => row.reason === "Episode-specific ID required" && row.showIds);
   const groups = new Map();
   for (const row of missing) {
     const ids = row.showIds;
@@ -502,19 +469,8 @@ async function resolveMissingTraktEpisodes() {
       }
       $("export-episode-status").textContent = "Resolved " + resolved + " episode IDs; " + missed +
         " unmatched. Checked " + Math.min(i+2, targets.length) + "/" + targets.length + " TV seasons…";
-      $("trakt-connect-status").textContent = "Looking up episode IDs: " +
-        Math.min(i+2, targets.length) + "/" + targets.length +
-        " TV seasons checked, " + resolved + " episodes resolved so far.";
     }
     renderExportPreview();
-    updateTraktSyncUi();
-    const remaining = syncCandidatesNow().unresolved;
-    const remainingPlayback = remaining.filter(item=>item.kind==="playback").length;
-    $("trakt-connect-status").textContent = "Episode lookup finished: " + resolved +
-      " matched, " + missed + " unmatched. " + remainingPlayback +
-      " Continue Watching entries still need IDs. " +
-      (remaining.length ? "Resolve or explicitly exclude them before comparing again." :
-        "All selected changes have IDs. Compare with live Trakt again.");
     $("export-episode-status").textContent = resolved + " episode IDs resolved; " + missed + " unmatched. " +
       (exportImportPreview?.unresolved?.length || 0) +
       " total unmatched records remain. No whole-show fallback is used.";
@@ -548,388 +504,6 @@ function downloadTraktWebImport() {
   setStatus("Trakt import JSON downloaded with " + result.summary.history + " watches (" +
     result.summary.episodes + " episodes) and " + result.summary.watchlist +
     " watchlist additions. Upload this JSON in Trakt's JSON File import option.", "success");
-}
-
-function updateTraktSyncUi() {
-  const authorized = Boolean(traktConnection && traktConnection.expiresAt>Date.now());
-  const ready = Boolean(authorized && exportMergeResult && exportArchiveTextFiles && state.remoteBefore);
-  $("trakt-authorize").disabled = traktBusy || authorized;
-  $("trakt-resolve-ids").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles;
-  $("trakt-skip-unmatched-playback").disabled = traktBusy || exportEpisodeLookupInFlight || !exportMergeResult || !exportArchiveTextFiles || $("trakt-unmatched").hidden;
-  $("trakt-check").disabled = traktBusy || !ready;
-  $("trakt-commit").disabled = traktBusy || !traktLivePlan;
-  // Freeze checked selections while comparing or writing so the UI cannot
-  // imply that a mid-flight checkbox change cancelled an already-sent batch.
-  for(const input of document.querySelectorAll(".export-choice input[type=checkbox]")) input.disabled=traktBusy;
-  $("trakt-disconnect").disabled = traktBusy || !authorized;
-  $("trakt-live-plan").hidden = !traktLivePlan;
-  if (!authorized && !traktBusy) $("trakt-connect-status").textContent = "Not connected to Trakt.";
-}
-
-function traktCallbackToOpener() {
-  const params = new URLSearchParams(window.location.search);
-  if (!window.opener || (!params.has("code") && !params.has("error"))) return;
-  const payload = {type:"nuvio-trakt-oauth-response",code:params.get("code"),
-    state:params.get("state"),error:params.get("error")};
-  if (!params.get("state")) return;
-  window.opener.postMessage(payload,window.location.origin);
-  history.replaceState(null,"",window.location.pathname);
-  window.close();
-}
-
-async function authorizeTraktDirect() {
-  if (traktBusy) return;
-  const clientId=String($("trakt-client-id").value||"").trim();
-  // Open the popup synchronously from a user click, before awaiting crypto.subtle.
-  const popup=window.open("about:blank","nuvio-trakt-oauth","width=620,height=760");
-  if (!popup) {
-    $("trakt-connect-status").textContent="Your browser blocked the Trakt login popup. Allow popups and retry.";
-    return;
-  }
-  traktBusy=true;
-  updateTraktSyncUi();
-  try {
-    const redirectUri=window.location.origin+window.location.pathname;
-    const auth=await createTraktAuthorization({clientId,redirectUri});
-    traktAuthAttempt={...auth,popup};
-    popup.location.href=auth.url;
-    $("trakt-connect-status").textContent="Authorize the requested access in the Trakt popup. Keep this tab open.";
-  } catch(error) {
-    popup.close();
-    traktAuthAttempt=null;
-    $("trakt-connect-status").textContent="Could not start Trakt authorization: "+(error.message||error);
-    traktBusy=false;
-    updateTraktSyncUi();
-  }
-}
-
-async function receiveTraktAuth(event) {
-  if (event.origin!==window.location.origin || event.data?.type!=="nuvio-trakt-oauth-response")return;
-  const pending=traktAuthAttempt;
-  if (!pending || event.source!==pending.popup || event.data.state!==pending.state) return;
-  traktAuthAttempt=null;
-  try { pending.popup.close(); } catch {}
-  try {
-    if(event.data.error)throw Error("Trakt denied sign-in: "+event.data.error);
-    const token=await exchangeTraktCode({code:event.data.code,verifier:pending.verifier,
-      clientId:pending.clientId,redirectUri:pending.redirectUri});
-    traktConnection={clientId:pending.clientId,...token};
-    traktConfirmedLedger={history:new Set(),watchlist:new Set(),playback:new Set()};
-    traktLivePlan=null;
-    $("trakt-connect-status").textContent="Trakt authorized for this browser tab. Compare with live Trakt before syncing.";
-  } catch(error) {
-    traktConnection=null;
-    $("trakt-connect-status").textContent="Authorization failed: "+(error.message||error)+
-      ". Check your Trakt app's CORS origin and exact callback URL.";
-  } finally {
-    traktBusy=false;
-    updateTraktSyncUi();
-  }
-}
-
-function disconnectTraktDirect() {
-  traktConfirmedLedger={history:new Set(),watchlist:new Set(),playback:new Set()};
-  traktConnection=null;
-  traktAuthAttempt=null;
-  traktLivePlan=null;
-  $("trakt-client-id").value="";
-  $("trakt-connect-status").textContent="Disconnected. No Trakt token was saved.";
-  updateTraktSyncUi();
-}
-
-function syncCandidatesNow() {
-  if(!exportArchiveTextFiles||!exportMergeResult||!exportCandidates)
-    throw Error("Read Nuvio data and build the merged preview first.");
-  const approvedIds=new Set(exportAllCandidateRows()
-    .filter(row=>!exportExcludedChanges.has(row.id)).map(row=>row.id));
-  // Use exactly the proposed changes visible in the review checklist.
-  // Never reuse a previously merged/selected plan as the input source.
-  return buildTraktSyncCandidates(exportArchiveTextFiles,exportCandidates,{
-    excluded:exportExcludedChanges,episodeIds:exportEpisodeIds,selectedChangeIds:approvedIds,
-  });
-}
-
-// Review blockers using the same change IDs as the watchlist, history and
-// playback checkboxes; neither the ZIP nor direct sync may secretly re-include
-// a record excluded here.
-function renderUnmatchedTraktChanges() {
-  const section=$("trakt-unmatched"), list=$("trakt-unmatched-list");
-  if (!section || !list) return;
-  list.replaceChildren();
-  if (!exportArchiveTextFiles || !exportCandidates || !exportMergeResult) {
-    section.hidden=true;
-    $("trakt-skip-unmatched-playback").disabled=true;
-    return;
-  }
-  let missing;
-  try {
-    missing=syncCandidatesNow().unresolved;
-  } catch(error) {
-    section.hidden=true;
-    $("trakt-skip-unmatched-playback").disabled=true;
-    return;
-  }
-  section.hidden=!missing.length;
-  $("trakt-skip-unmatched-playback").disabled=traktBusy || exportEpisodeLookupInFlight || !missing.some(row=>row.changeId);
-  $("trakt-unmatched-status").textContent=missing.length
-    ? missing.length+" selected change(s) block sync. Exclude each unwanted entry, or choose Exclude all unmatched changes. The export preview will reflect your choices."
-    : "All selected entries can be matched.";
-  for(const entry of missing){
-    const li=document.createElement("li");
-    const kind=entry.kind==="history"?"Watched history":entry.kind==="watchlist"?"Watchlist":"Continue Watching";
-    const subject=entry.title+(entry.season == null?"":" · S"+
-      String(entry.season).padStart(2,"0")+"E"+String(entry.episode).padStart(2,"0"));
-    const description=document.createElement("span");
-    description.textContent=kind+" · "+subject+" · "+entry.reason+" ";
-    li.append(description);
-    if(entry.changeId){
-      const button=document.createElement("button");
-      button.type="button";
-      button.className="secondary";
-      button.textContent="Exclude this change";
-      button.disabled=traktBusy || exportEpisodeLookupInFlight;
-      button.setAttribute("aria-label","Exclude "+kind+" "+subject+" from migration");
-      button.addEventListener("click",()=>{
-        exportExcludedChanges.add(entry.changeId);
-        renderExportPreview();
-        $("trakt-connect-status").textContent=
-          subject+" excluded from selected changes. Compare with live Trakt again.";
-      });
-      li.append(button);
-    } else {
-      const warning=document.createElement("strong");
-      warning.textContent=" Original archival record cannot be excluded here.";
-      li.append(warning);
-    }
-    list.append(li);
-  }
-}
-
-function excludeUnmatchedTraktChanges() {
-  if (!exportMergeResult || !exportArchiveTextFiles || traktBusy) return;
-  const missing=syncCandidatesNow().unresolved;
-  const eligible=missing.filter(row=>row.changeId);
-  if(!eligible.length){
-    $("trakt-connect-status").textContent=missing.length
-      ? "Some original archival records have no selectable change ID."
-      : "All selected changes already have usable identifiers.";
-    renderUnmatchedTraktChanges();
-    return;
-  }
-  const counts={history:0,watchlist:0,playback:0};
-  for (const row of eligible) if(row.kind in counts) counts[row.kind]++;
-  const breakdown=counts.history+" watched-history, "+counts.watchlist+" watchlist, "+
-    counts.playback+" Continue Watching";
-  if(!window.confirm("Exclude "+eligible.length+" unmatched changes ("+breakdown+") from this migration?"+
-    " They will also be unchecked in the export preview. Nothing will be deleted from Nuvio or the original Trakt ZIP.")) return;
-  for (const row of eligible) exportExcludedChanges.add(row.changeId);
-  renderExportPreview();
-  const remaining=syncCandidatesNow().unresolved;
-  $("trakt-connect-status").textContent=eligible.length+" unmatched changes excluded ("+
-    breakdown+"). "+remaining.length+" unresolved selected changes remain."+
-    (remaining.length ? " Review them above." : " Compare with live Trakt again.");
-}
-
-function traktMediaDescription(item) {
-  const base=String(item.title||"Unidentified media");
-  const segment=item.type==="episode" && item.season!=null && item.episode!=null
-    ? " · S"+String(item.season).padStart(2,"0")+"E"+String(item.episode).padStart(2,"0")
-    : "";
-  return base+segment+(item.episodeTitle?" · "+item.episodeTitle:"");
-}
-
-function renderTraktProgressMapping(plan,candidates) {
-  const wrapper=$("trakt-progress-mapping"),list=$("trakt-progress-mapping-list");
-  if(!wrapper || !list)return;
-  list.replaceChildren();
-  const inferredNew=new Set((plan.inferredWatched||[]).map(item=>item.changeId));
-  const pauseNew=new Set((plan.playback||[]).map(item=>item.changeId));
-  const records=[
-    ...(candidates.playback||[]).map(item=>({
-      item,
-      display:item.adjustment==="high"
-        ? "Pause "+item.originalProgress.toFixed(2)+"% → 79.99%"
-        : item.adjustment==="low"
-          ? "Pause "+item.originalProgress.toFixed(2)+"% → 2.00% (safe minimum)"
-          : "Pause "+item.progress.toFixed(2)+"% (unchanged)",
-      action:pauseNew.has(item.changeId)?"Will sync":
-        "Trakt already has an equal/newer resume or a later watched event — skipped",
-    })),
-    ...(candidates.inferredWatched||[]).map(item=>({
-      item,display:"Watched (assumed from "+item.originalProgress.toFixed(2)+"%)",
-      action:inferredNew.has(item.changeId)?"Will add dated watched event":
-        "Already watched on Trakt — skipped",
-    })),
-    ...(candidates.alreadyWatchedProgress||[]).map(item=>({
-      item,display:"Already watched in Nuvio ("+item.originalProgress.toFixed(2)+"%)",
-      action:"Nuvio watched-history entry takes precedence — no duplicate",
-    })),
-  ].sort((a,b)=>Number(a.item.changeId?.split(":")[1]||0)-
-    Number(b.item.changeId?.split(":")[1]||0));
-  wrapper.hidden=!records.length;
-  for(const row of records){
-    const li=document.createElement("li");
-    const info=document.createElement("span");
-    info.textContent=traktMediaDescription(row.item)+" — "+row.display+" · "+row.action+" ";
-    li.append(info);
-    const button=document.createElement("button");
-    button.type="button";
-    button.className="secondary";
-    button.textContent="Exclude";
-    button.disabled=traktBusy;
-    button.setAttribute("aria-label","Exclude "+traktMediaDescription(row.item)+" from direct sync");
-    button.addEventListener("click",()=>{
-      exportExcludedChanges.add(row.item.changeId);
-      renderExportPreview();
-      $("trakt-connect-status").textContent=traktMediaDescription(row.item)+
-        " excluded from proposed changes. Recompare with live Trakt before syncing.";
-    });
-    li.append(button);
-    list.append(li);
-  }
-}
-
-function renderTraktPlaybackFailures(report) {
-  const wrapper=$("trakt-playback-errors"),list=$("trakt-playback-errors-list");
-  if(!wrapper||!list)return;
-  list.replaceChildren();
-  const rejected=report?.playbackRejected||[];
-  wrapper.hidden=!rejected.length;
-  for(const row of rejected){
-    const li=document.createElement("li");
-    const label=document.createElement("span");
-    label.textContent=traktMediaDescription(row)+" — attempted "+row.progress.toFixed(2)+
-      "% (Nuvio "+row.originalProgress.toFixed(2)+"%) · "+row.message+" ";
-    li.append(label);
-    if(row.changeId){
-      const button=document.createElement("button");
-      button.type="button";
-      button.className="secondary";
-      button.textContent="Exclude before retry";
-      button.addEventListener("click",()=>{
-        exportExcludedChanges.add(row.changeId);
-        renderExportPreview();
-        $("trakt-connect-status").textContent=
-          traktMediaDescription(row)+" excluded. Compare again before syncing.";
-      });
-      li.append(button);
-    }
-    list.append(li);
-  }
-}
-
-async function compareTraktDirect() {
-  if (traktBusy || !traktConnection) return;
-  traktBusy=true;
-  traktLivePlan=null;
-  updateTraktSyncUi();
-  try {
-    const candidates=syncCandidatesNow();
-    renderTraktPlaybackFailures(null);
-    renderUnmatchedTraktChanges();
-    if(candidates.unresolved.length){
-      const samples=candidates.unresolved.slice(0,4).map(row=>
-        row.title+(row.season!=null?" S"+row.season+"E"+row.episode:"")+": "+row.reason).join("; ");
-      const error = new Error(candidates.unresolved.length +
-        " selected change(s) cannot be safely matched. " + samples +
-        ". In 'Unmatched changes blocking direct sync' above, choose 'Exclude this change' or 'Exclude all unmatched changes' to remove unwanted records.");
-      error.code = "MISSING_IDS";
-      throw error;
-    }
-    const api=makeTraktApi(traktConnection);
-    const {body:profile}=await api("/users/settings");
-    const user=profile?.user?.username || profile?.user?.name || "your Trakt account";
-    const comparisonRevision=traktPreviewRevision;
-    const plan=await planTraktSync(api,candidates,{acknowledged:traktConfirmedLedger});
-    if(comparisonRevision!==traktPreviewRevision)
-      throw Error("The review selections changed during comparison. Recompare the selected changes.");
-    traktLivePlan={plan,user,revision:comparisonRevision};
-    renderTraktProgressMapping(plan,candidates);
-    const counts=plan;
-    $("trakt-plan-counts").textContent="Trakt account: "+user+
-      " · "+plan.history.length+" new watched events ("+plan.inferredWatched.length+
-      " inferred from ≥89% playback), "+plan.watchlist.length+
-      " new watchlist titles, "+plan.playback.length+" resume positions ("+
-      plan.adjustedPlayback.filter(item=>item.adjustment==="high").length+
-      " reduced to 79.99%, "+
-      plan.adjustedPlayback.filter(item=>item.adjustment==="low").length+
-      " raised to 2%). Already on Trakt or newer there: "+
-      plan.existingSkipped.history+" watches, "+plan.existingSkipped.watchlist+
-      " watchlist entries, "+plan.existingSkipped.playback+" resume positions. "+
-      "Every conversion below is traceable to a checked Nuvio change.";
-    $("trakt-connect-status").textContent="Live comparison complete. Review the counts and confirm separately before any changes.";
-  } catch(error) {
-    $("trakt-connect-status").textContent="Live Trakt comparison failed: "+(error.message||error)+
-      ". No changes were sent to Trakt." + (error?.code === "MISSING_IDS"
-        ? " Resolve missing episode IDs if appropriate, or use the exclusion buttons above for incorrect movies, shows or playback."
-        : " Check your Trakt app CORS settings only if this is a network/API error.");
-  } finally {
-    traktBusy=false;
-    updateTraktSyncUi();
-  }
-}
-
-async function commitTraktDirect() {
-  if (traktBusy || !traktConnection || !traktLivePlan) return;
-  const {plan,user,revision}=traktLivePlan;
-  if(revision!==traktPreviewRevision){
-    traktLivePlan=null;
-    updateTraktSyncUi();
-    $("trakt-connect-status").textContent="Your selected changes were modified after comparison. Compare again before syncing.";
-    return;
-  }
-  const total=plan.history.length+plan.watchlist.length+plan.playback.length;
-  if(!total){
-    $("trakt-connect-status").textContent="Nothing new to sync: Trakt already has the selected data.";
-    return;
-  }
-  const approved=window.confirm("Sync to "+user+"? Add "+plan.history.length+
-    " watched events, "+plan.watchlist.length+" watchlist titles and "+plan.playback.length+
-    " resume positions. This INCLUDES "+plan.inferredWatched.length+
-    " inferred watched entries from Nuvio progress ≥89%, and "+
-    plan.adjustedPlayback.filter(item=>item.adjustment==="high").length+
-    " resume positions reduced to 79.99% (80%–<89% originally), and "+
-    plan.adjustedPlayback.filter(item=>item.adjustment==="low").length+
-    " very early resume positions raised to 2% (originally under 1%). All other pauses retain their percentages. "+
-    "Already present Trakt resume positions were skipped. The backup ZIP retains the exact original percentages. "+
-    "No existing Trakt records will be deleted. This may not be reversible.");
-  if (!approved) return;
-  traktBusy=true;
-  traktLivePlan=null; // a plan is consumed once, even on partial error; recompare before retrying
-  updateTraktSyncUi();
-  let last={history:0,watchlist:0,playback:0,playbackRejected:[]};
-  try {
-    const api=makeTraktApi(traktConnection);
-    const report=await executeTraktSync(api,plan,{onConfirmed:(kind,group)=>{
-      for(const row of group){
-        const key=kind==="playback"?(row.changeId+"|"+row.progress):JSON.stringify(row);
-        traktConfirmedLedger[kind].add(key);
-      }
-    },onProgress:progress=>{
-      last=progress;
-      renderTraktPlaybackFailures(progress);
-      $("trakt-connect-status").textContent="Trakt sync in progress: "+
-        last.history+" watches, "+last.watchlist+" watchlist, "+last.playback+
-        " playback positions confirmed, "+(last.playbackRejected?.length||0)+
-        " playback entries rejected (shown below).";
-    }});
-    renderTraktPlaybackFailures(report);
-    $("trakt-connect-status").textContent="Trakt confirmed "+report.history+" watched events, "+
-      report.watchlist+" watchlist entries and "+report.playback+" playback positions. "+
-      report.playbackRejected.length+" individual playback items were rejected; review the titles and percentages below before re-comparing. "+
-      (report.notFound.length?report.notFound.length+" history/watchlist IDs were not found; check those records.":"");
-  } catch(error) {
-    $("trakt-connect-status").textContent="Sync stopped after a Trakt API error: "+(error.message||error)+
-      ". Confirmed so far: "+last.history+" watches, "+last.watchlist+" watchlist, "+
-      last.playback+" playback positions and "+(last.playbackRejected?.length||0)+
-      " individual playback rejections. "+(error.failedItem?
-        "Failed media: "+traktMediaDescription(error.failedItem)+
-        " at "+Number(error.failedItem.progress).toFixed(2)+"%. ":"")+
-      "Run Compare again before retrying; never blindly resend.";
-  } finally {
-    traktBusy=false;
-    updateTraktSyncUi();
-  }
 }
 
 function updateExportReadiness() {
@@ -1042,15 +616,6 @@ $("tool-export-tab")?.addEventListener("click", () => setToolMode("export"));
 $("export-zip-input")?.addEventListener("change", onExportZipSelected);
 $("export-login-button")?.addEventListener("click", startLogin);
 $("export-button")?.addEventListener("click", downloadMergedTraktArchive);
-$("trakt-authorize")?.addEventListener("click", authorizeTraktDirect);
-$("trakt-resolve-ids")?.addEventListener("click", resolveMissingTraktEpisodes);
-$("trakt-skip-unmatched-playback")?.addEventListener("click", excludeUnmatchedTraktChanges);
-$("trakt-check")?.addEventListener("click", compareTraktDirect);
-$("trakt-commit")?.addEventListener("click", commitTraktDirect);
-$("trakt-disconnect")?.addEventListener("click", disconnectTraktDirect);
-window.addEventListener("message",receiveTraktAuth);
-traktCallbackToOpener();
-
 for (const input of document.querySelectorAll('input[name="reverse-file-format"]')) {
   input.addEventListener("change", () => { renderTraktImportReadiness(); updateExportReadiness(); });
 }
@@ -1068,8 +633,6 @@ $("profile-select")?.addEventListener("change", () => {
     exportMetadata.clear();
     exportEpisodeIds.clear();
     exportCandidates = null;
-    traktLivePlan = null;
-    updateTraktSyncUi();
     $("remote-summary").hidden = true;
     setStatus("Profile changed. Click Read Nuvio data to load the selected profile.");
   }
@@ -1078,7 +641,6 @@ $("profile-select")?.addEventListener("change", () => {
   updateExportReadiness();
 });
 setToolMode("import");
-updateTraktSyncUi();
 
 window.addEventListener("beforeunload", () => {
 `,

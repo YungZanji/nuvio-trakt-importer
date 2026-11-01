@@ -34,6 +34,8 @@ The site now has two separate workflows:
 
 Both workflows run in the browser. The project has no application server, database, analytics, cookies, or persistent browser storage.
 
+The public Nuvio → Trakt workflow is **export-only**. It never authorizes a Trakt account or directly writes to Trakt through its API. Individual Nuvio additions and updates can be unchecked before generating either format.
+
 The original Trakt ZIP is never uploaded by this tool. Reverse export creates a separate merged ZIP and never modifies the source archive on disk.
 
 ---
@@ -99,38 +101,29 @@ After reviewing individual Nuvio changes, pick one:
 
 **Validation:** Preview the JSON import on Trakt before confirming it. Existing Trakt watch history may contain the original records; leave "include original history" off to avoid importing those events again.
 
-### Direct-sync safety and retry behavior
+## Archived direct Trakt sync (not deployed)
 
-- **Selection applies to sync:** Only checked review items can be sent to Trakt. Changing checkboxes invalidates the live plan; always re-run **Compare with live Trakt account** before confirming. The boxes are locked during in-flight writes.
-- **Watch timestamps:** Trakt normalizes `watched_at` to the start of each minute. The live comparison uses that same precision, including the `start_at` query boundary. Without this, successful writes can be incorrectly shown again in the next comparison.
-- **Previously confirmed batches:** When Trakt acknowledges a complete batch, its records are remembered in the current browser tab so an immediate retry does not re-send them if live reads lag. On reload, the live Trakt API comparison is still authoritative.
-- **Very early playback (under 1%):** Trakt rejects these with HTTP `422 progress_too_low`. Direct sync now rounds positive progress below 1% (and a rounded zero from a started Nuvio playback) to **2%**, safely above the documented minimum. Nuvio's real percentage and timestamp remain unchanged in the original/merged ZIP.
-- **Every resume is compared to live Trakt first:** The comparison reads `/sync/playback`, matches movie/episode IDs, and prefers the latest Trakt pause. It does not resend a pause if Trakt already has the same percentage or a newer paused timestamp, even across browser reloads. The preview lists all candidate resume positions with their status, original percentage and any conversion.
-- **Partial playback failures:** A Trakt HTTP 422 on one pause is reported with the movie/show, episode and attempted progress. The importer moves to the next item without marking it watched. Authentication, rate-limit, network, or server failures still stop further writes. Confirmed individual saves stay acknowledged in the open tab; after reload the remote playback comparison prevents duplicate pauses.
-- **Direct-sync mapping of high progress (explicit user-selected policy):** Nuvio resume progress from **80% up to but not including 89%** is sent to Trakt's `/scrobble/pause` endpoint at **79.99%**. Progress **89% or higher** is intentionally treated as a completed watch and added via `/sync/history` using its original Nuvio last-progress timestamp; it does **not** call `/scrobble/stop`. New watched-history events already recorded in Nuvio take precedence so the playback row does not make a duplicate. The review names the show/movie, season/episode, episode title if available, original percentage, converted action, and whether the event is already present on Trakt. Users may explicitly uncheck any of these changes before sync. The **Trakt ZIP backup always preserves the original percentage and timestamp unchanged**.
-- **Rate limits:** Authenticated writes are spaced to respect the Standard API limit of one write per second. Authentication/network/rate-limit/server errors halt the write sequence, while individual HTTP 422 playback validation errors are isolated and shown separately. Always recompare with live Trakt before another sync.
+The optional OAuth-based **Sync directly to Trakt** feature was removed from the public app on 2026-11-01, after the original migration was completed. This keeps the publicly accessible version focused on the two export formats.
 
-## Direct Trakt sync (OAuth PKCE)
+The entire previously deployed implementation, including OAuth/PKCE, direct watched/watchlist/playback sync, comparison safeguards, and regression tests, is preserved in the **[archive/direct-trakt-sync-2026-11-01](https://github.com/YungZanji/nuvio-trakt-importer/tree/archive/direct-trakt-sync-2026-11-01)** branch at commit `ee323a17a14461c37be78138544d4f5a82c6c7ef`. It is **not** a second public deployment.
 
-In addition to downloading Trakt backup ZIPs and Trakt-compatible JSON, the **Nuvio → Trakt** workflow offers a **direct Trakt sync** option. It can send user-approved, newly watched Nuvio movies/episodes, Nuvio Library items (to Trakt Watchlist), and unfinished playback percentages (using Trakt's pause-scrobble endpoint).
+To temporarily restore the feature, create a fresh branch from current `main` and copy the archived implementation's exact files into it:
 
-This option is a **one-time, explicitly confirmed migration**, not automatic background synchronization.
+```bash
+git switch main
+git pull --ff-only
+git switch -c restore-direct-trakt-sync
+git restore --source archive/direct-trakt-sync-2026-11-01 -- \
+  src/export-template.mjs src/export-ui-transform.mjs src/export-ui.css \
+  src/trakt-direct-sync.mjs build.mjs \
+  test/reverse-ui.test.mjs test/trakt-direct-sync.test.mjs
+git add -A
+git commit -m "Temporarily restore direct Trakt sync"
+git push -u origin restore-direct-trakt-sync
+```
 
-1. Register a Trakt API app at [Trakt My Apps](https://app.trakt.tv/oauth/applications). Set its **redirect URI** to `https://yungzanji.github.io/nuvio-trakt-importer/` and its **JavaScript/CORS origin** to `https://yungzanji.github.io`.
-2. Enter its **Client ID** in Step 4; **never enter a Client Secret**. Click **Authorize Trakt (PKCE)** and grant access in the popup. Keep the main tab open.
-3. Upload the original Trakt ZIP, sign into Nuvio and review individual changes. Resolve unknown **episode IDs** using your TMDB Read Access Token as needed.
-4. Click **Compare with live Trakt account**. The tool reads current watch history, watchlist, and playback and identifies only missing/newer items.
-5. Click **Confirm and sync to Trakt**. No writes occur before this explicit confirmation. The tool never calls Trakt deletion endpoints.
+Open and merge a pull request into `main` to deploy through the existing GitHub Pages workflow, or deploy the archive build privately. Reversing that restoration PR returns the site to exports only. Do not paste OAuth tokens or personal Trakt data into the repository.
 
-New-only sync does not re-upload the full original Trakt history. Normal pauses under 80% keep their exact percentage (with a fresh Trakt pause timestamp), 80–<89% positions are clamped to 79.99%, and ≥89% selected positions create dated watched-history events if not already watched. These adjustments **only** apply to direct sync. The ZIP always retains the original Nuvio percentages and timestamps.
-
-**Privacy:** Trakt OAuth PKCE has no Client Secret; Client ID and access token are held only in the active page's memory, not cookies, persistent storage, or a backend. Trakt/Nuvio requests are made directly from the browser. An app-specific CORS origin must be configured at Trakt. Disconnect or close the tab to discard the Trakt token.
-
-**Failures:** Rate limits, app permission restrictions, and unmatched IDs can prevent migration. The tool reports confirmed writes, stops on errors, and requires a fresh comparison before retrying. This functionality passes mocked API tests, but it has not yet been verified by a real OAuth session on the owner's Trakt account.
-
-*This application uses Trakt but is not endorsed or certified by Trakt.*
-
----
 ## Reverse merge rules
 
 The original Trakt export remains the historical base.

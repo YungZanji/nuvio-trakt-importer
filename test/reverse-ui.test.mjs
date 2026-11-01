@@ -77,110 +77,18 @@ test("reverse workflow offers archive ZIP and exact Trakt web-import JSON format
 });
 
 
-test("direct sync has independent Trakt authorization, live review and explicit write confirmation",async()=>{
+test("public reverse exporter preserves individual selections, ZIP and JSON without direct Trakt OAuth",async()=>{
+  const source=await transformedAppSource();
   const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  for(const id of ["trakt-client-id","trakt-authorize","trakt-resolve-ids","trakt-check","trakt-commit","trakt-disconnect","trakt-live-plan"]){
+  for(const id of ["export-detail-watchlist","export-detail-history","export-detail-playback",
+    "export-select-all","export-select-none","export-button","export-import-options"]) {
     assert.match(html,new RegExp('id="'+id+'"'));
   }
-  const source=await transformedAppSource();
-  assert.match(source,/createTraktAuthorization/);
-  assert.match(source,/exchangeTraktCode/);
-  assert.match(source,/planTraktSync/);
-  assert.match(source,/executeTraktSync/);
-  assert.match(source,/window\.confirm\(/);
-  assert.match(source,/traktLivePlan=null/);
-  assert.match(source,/window\.opener\.postMessage/);
-  const csp=await readFile(resolve(root,"build.mjs"),"utf8");
-  assert.match(csp,/https:\/\/auth\.trakt\.tv/);
-  assert.match(csp,/https:\/\/api\.trakt\.tv/);
-});
-
-
-test("direct resolver includes Continue Watching episodes without switching to JSON mode", async()=>{
-  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  assert.match(html,/id="trakt-resolve-ids"/);
-  assert.match(html,/id="trakt-skip-unmatched-playback"/);
-  const source=await transformedAppSource();
-  assert.match(source,/const syncMissing = syncCandidatesNow\(\)\.unresolved/);
-  assert.match(source,/row.reason\?\.startsWith\("Episode-specific ID required"\)/);
-  assert.match(source,/\$\("trakt-resolve-ids"\)\?\.addEventListener\("click", resolveMissingTraktEpisodes\)/);
-  assert.match(source,/excludeUnmatchedTraktChanges/);
-  assert.match(source,/error\.code = "MISSING_IDS"/);
-  assert.doesNotMatch(source,/Resolve missing episode IDs \(in JSON mode\)/);
-  assert.doesNotMatch(source,/Ensure your app's CORS origin is set correctly/);
-});
-
-
-test("changing reviewed selections invalidates previous direct-sync plan and enforces allowlist", async()=>{
-  const source=await transformedAppSource();
-  const start=source.indexOf("function renderExportPreview()");
-  const preview=source.slice(start,source.indexOf("function selectedTraktFormat()",start));
-  assert.match(preview,/traktPreviewRevision\+\+/);
-  assert.match(preview,/traktLivePlan = null/);
-  assert.match(preview,/updateTraktSyncUi\(\)/);
-  const select=source.slice(source.indexOf("function syncCandidatesNow()"),source.indexOf("function excludeUnmatchedTraktChanges()"));
-  assert.match(select,/selectedChangeIds:approvedIds/);
-  assert.match(select,/exportCandidates/);
-  assert.match(select,/filter\(row=>!exportExcludedChanges\.has\(row\.id\)\)/);
-  const commit=source.slice(source.indexOf("async function commitTraktDirect()"),source.indexOf("function updateExportReadiness()"));
-  assert.match(commit,/revision!==traktPreviewRevision/);
-  assert.match(commit,/onConfirmed:/);
-  assert.match(source,/inferredWatched\.length/);
-  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  assert.match(html,/id="trakt-progress-mapping-list"/);
-});
-
-
-test("direct-sync blocker review can exclude movies, shows, episodes, and playback individually",async()=>{
-  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  assert.match(html,/id="trakt-unmatched"/);
-  assert.match(html,/id="trakt-unmatched-list"/);
-  assert.match(html,/Exclude all unmatched changes/);
-  const source=await transformedAppSource();
-  const snippet=source.slice(source.indexOf("function renderUnmatchedTraktChanges()"),
-    source.indexOf("async function compareTraktDirect()"));
-  assert.match(snippet,/syncCandidatesNow\(\)\.unresolved/);
-  assert.match(snippet,/entry\.kind==="history"/);
-  assert.match(snippet,/entry\.kind==="watchlist"/);
-  assert.match(snippet,/entry\.reason/);
-  assert.match(snippet,/button\.textContent="Exclude this change"/);
-  assert.match(snippet,/exportExcludedChanges\.add\(entry\.changeId\)/);
-  assert.match(snippet,/exportExcludedChanges\.add\(row\.changeId\)/);
-  assert.match(snippet,/renderExportPreview\(\)/);
-  assert.match(source,/\$\("trakt-skip-unmatched-playback"\)\?\.addEventListener\("click", excludeUnmatchedTraktChanges\)/);
-  assert.doesNotMatch(snippet,/\.filter\(row=>row\.kind==="playback" && row\.changeId\)/);
-});
-
-
-test("named progress conversion preview discloses watched assumptions and pause clamping with exclusions",async()=>{
-  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  assert.match(html,/Resume positions and conversions/);
-  assert.match(html,/id="trakt-progress-mapping"/);
-  assert.match(html,/id="trakt-progress-mapping-list"/);
-  const source=await transformedAppSource();
-  assert.match(source,/function traktMediaDescription\(item\)/);
-  assert.match(source,/function renderTraktProgressMapping\(plan,candidates\)/);
-  assert.match(source,/item\.episodeTitle/);
-  assert.match(source,/79\.99%/);
-  assert.match(source,/exportExcludedChanges\.add\(row\.item\.changeId\)/);
-  assert.match(source,/renderExportPreview\(\)/);
-  assert.match(source,/inferredWatched\.length/);
-  assert.match(source,/adjustedPlayback\.filter/);
-  assert.doesNotMatch(source,/selected resume positions at ≥80% cannot be restored/);
-});
-
-
-test("Direct Trakt comparison previews all resumes including existing and very-low items",async()=>{
-  const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  assert.match(html,/id="trakt-progress-mapping-list"/);
-  assert.match(html,/id="trakt-playback-errors"/);
-  assert.match(html,/id="trakt-playback-errors-list"/);
-  const source=await transformedAppSource();
-  assert.match(source,/candidates\.playback\|\|\[\]/);
-  assert.match(source,/Pause "\+item\.originalProgress\.toFixed\(2\)\+"% → 2\.00%/);
-  assert.match(source,/Trakt already has an equal\/newer resume/);
-  assert.match(source,/function renderTraktPlaybackFailures\(report\)/);
-  assert.match(source,/renderTraktPlaybackFailures\(progress\)/);
-  assert.match(source,/report\.playbackRejected\.length/);
-  assert.match(source,/exportExcludedChanges\.add\(row\.changeId\)/);
+  assert.match(html,/Trakt backup archive/);
+  assert.match(html,/Trakt website import/);
+  assert.match(source,/exportExcludedChanges/);
+  assert.match(source,/buildTraktImportJson/);
+  assert.match(source,/buildMergedTraktExport/);
+  assert.doesNotMatch(html,/trakt-direct-sync|trakt-authorize|trakt-client-id|Confirm and sync to Trakt/);
+  assert.doesNotMatch(source,/createTraktAuthorization|exchangeTraktCode|executeTraktSync|\/scrobble\/pause|makeTraktApi/);
 });
