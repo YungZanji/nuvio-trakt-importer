@@ -491,3 +491,36 @@ test("422 scrobble rejection is isolated, other playback items still sync",async
   assert.equal(report.playbackRejected[0].episode,4);
   assert.match(report.playbackRejected[0].message,/progress_too_low/);
 });
+
+
+test("An old playback response row does not override a newer server pause",async()=>{
+  const files=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const merge={updates:new Map(),changes:{history:[],watchlist:[],playback:[{
+    id:"progress:1",action:"add",entry:{type:"movie",movie:{title:"Test",ids:{tmdb:70}},
+      progress:30,paused_at:"2026-10-24T09:00:00Z"}
+  }]}};
+  const candidate=buildTraktSyncCandidates(files,merge);
+  const api=async path=>{
+    if(path.startsWith("/sync/history"))return wrap([]);
+    if(path.startsWith("/sync/playback"))return wrap([
+      {type:"movie",movie:{ids:{tmdb:70}},progress:42,paused_at:"2026-10-25T09:00:00Z"},
+      {type:"movie",movie:{ids:{tmdb:70}},progress:10,paused_at:"2026-10-23T09:00:00Z"},
+    ]);
+    throw Error(path);
+  };
+  const planned=await planTraktSync(api,candidate);
+  assert.equal(planned.playback.length,0);
+});
+
+test("Other Trakt failures halt without silently continuing to send data",async()=>{
+  const items=[{type:"movie",ids:{tmdb:20},progress:30,changeId:"progress:0"},
+    {type:"movie",ids:{tmdb:21},progress:40,changeId:"progress:1"}];
+  for(const status of [401,403,429,500]){
+    let attempts=0;
+    await assert.rejects(executeTraktSync(async()=>{
+      attempts++;
+      throw Object.assign(new Error("Trakt "+status),{status});
+    },{history:[],watchlist:[],playback:items},{sleep:async()=>{}}),/Trakt/);
+    assert.equal(attempts,1);
+  }
+});
