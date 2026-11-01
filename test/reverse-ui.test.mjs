@@ -80,7 +80,7 @@ test("reverse workflow offers archive ZIP and exact Trakt web-import JSON format
 test("public reverse exporter preserves individual selections, ZIP and JSON without direct Trakt OAuth",async()=>{
   const source=await transformedAppSource();
   const html=patchExportTemplate(await readFile(resolve(root,"src/index.template.html"),"utf8"));
-  for(const id of ["export-detail-watchlist","export-detail-history","export-detail-progress",
+  for(const id of ["export-detail-watchlist","export-detail-history","export-detail-playback",
     "export-select-all","export-select-none","export-button","export-import-options"]) {
     assert.match(html,new RegExp('id="'+id+'"'));
   }
