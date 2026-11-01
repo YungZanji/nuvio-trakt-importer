@@ -439,3 +439,55 @@ test("Early resume percentages are safely rounded to 2% for direct sync",()=>{
   assert.equal(result.inferredWatched.length,1);
   assert.equal(result.inferredWatched[0].originalProgress,89);
 });
+
+
+test("Live playback comparison skips 11 previously saved positions after reload",async()=>{
+  const files=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const changes={updates:new Map(),changes:{history:[],watchlist:[],playback:
+    Array.from({length:12},(_,i)=>({id:"progress:"+i,action:"add",
+      entry:{type:"movie",movie:{title:"Movie "+i,ids:{tmdb:1000+i}},
+        progress:i===0?0.25:20+i,paused_at:"2026-10-25T19:33:00Z"}}))
+  }};
+  const candidates=buildTraktSyncCandidates(files,changes);
+  let queried=0;
+  const api=async path=>{
+    if(path.startsWith("/sync/history"))return wrap([]);
+    if(path.startsWith("/sync/playback")){
+      queried++;
+      return wrap(Array.from({length:11},(_,i)=>({
+        type:"movie",movie:{ids:{trakt:i+1,tmdb:1000+i}},
+        progress:i===0?2:20+i,paused_at:"2026-10-26T15:00:00Z",
+      })));
+    }
+    throw Error(path);
+  };
+  const plan=await planTraktSync(api,candidates);
+  assert.equal(queried,1);
+  assert.equal(plan.playback.length,1);
+  assert.equal(plan.playback[0].changeId,"progress:11");
+  assert.equal(plan.existingSkipped.playback,11);
+});
+
+test("422 scrobble rejection is isolated, other playback items still sync",async()=>{
+  const plan={history:[],watchlist:[],playback:[
+    {type:"movie",ids:{tmdb:40},title:"Saved",changeId:"progress:1",progress:2,originalProgress:0.3},
+    {type:"episode",ids:{tmdb:42},title:"Rejected Show",season:2,episode:4,changeId:"progress:2",progress:25},
+    {type:"movie",ids:{tmdb:44},title:"Saved Later",changeId:"progress:3",progress:40},
+  ]};
+  let call=0;const confirmed=[];
+  const api=async()=>{
+    call++;
+    if(call===2)throw Object.assign(new Error("Trakt 422 progress_too_low"),{status:422});
+    return wrap({action:"pause"});
+  };
+  const report=await executeTraktSync(api,plan,{sleep:async()=>{},
+    onConfirmed:(kind,items)=>confirmed.push(...items.map(x=>x.changeId))});
+  assert.equal(call,3);
+  assert.equal(report.playback,2);
+  assert.deepEqual(confirmed,["progress:1","progress:3"]);
+  assert.equal(report.playbackRejected.length,1);
+  assert.equal(report.playbackRejected[0].title,"Rejected Show");
+  assert.equal(report.playbackRejected[0].season,2);
+  assert.equal(report.playbackRejected[0].episode,4);
+  assert.match(report.playbackRejected[0].message,/progress_too_low/);
+});
