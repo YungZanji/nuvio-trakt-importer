@@ -317,7 +317,7 @@ test("Trakt sync refuses >=80% pause even if a malformed older plan slips throug
   const api=async()=>{throw Error("No API write expected");};
   await assert.rejects(executeTraktSync(api,{history:[],watchlist:[],playback:[
     {changeId:"progress:0",type:"movie",ids:{imdb:"tt1234567"},progress:84.7152}
-  ]}),/Refusing unsafe pause/);
+  ]}),/Unsafe pause progress/);
 });
 
 test("partial Trakt batch only acknowledges fully confirmed groups",async()=>{
