@@ -22,6 +22,13 @@ assert.equal(script.includes("images.metahub.space"), false, "MetaHub artwork mu
 assert.equal(script.includes("localStorage"), false, "app must not store credentials in localStorage");
 assert.equal(script.includes("sessionStorage"), false, "app must not store credentials in sessionStorage");
 assert.equal(script.includes("indexedDB"), false, "app must not store credentials in IndexedDB");
+assert.equal(html.includes('id="trakt-direct-sync"'),false,"public site must not show direct Trakt sync");
+assert.equal(html.includes('id="trakt-authorize"'),false,"public site must not include Trakt authorization");
+assert.equal(script.includes("auth.trakt.tv"),false,"archived Trakt OAuth should not ship");
+assert.equal(script.includes("api.trakt.tv"),false,"archived direct Trakt API should not ship");
+assert.equal(csp.includes("auth.trakt.tv"),false,"no direct Trakt auth in content security policy");
+assert.equal(csp.includes("api.trakt.tv"),false,"no direct Trakt API in content security policy");
+assert.ok(html.includes('id="export-button"'),"ZIP/JSON export download must remain available");
 
 const digest = (value) => createHash("sha256").update(value).digest("base64");
 assert.ok(csp.includes(`script-src 'sha256-${digest(script)}'`), "script CSP hash mismatch");
