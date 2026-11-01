@@ -191,6 +191,11 @@ export function patchExportTemplate(source) {
               <button id="trakt-disconnect" class="secondary" type="button" disabled>Disconnect</button>
             </div>
             <p id="trakt-connect-status" class="substatus" aria-live="polite">Not connected to Trakt.</p>
+            <div id="trakt-playback-errors" hidden>
+              <h4>Playback entries Trakt rejected</h4>
+              <p class="substatus">A Trakt 422 response only rejects that specific resume entry. The importer records its title, episode and attempted percentage, continues to the next item, and never silently changes it to watched. You may exclude these items before the next comparison.</p>
+              <ul id="trakt-playback-errors-list" class="export-unmatched-list"></ul>
+            </div>
             <div id="trakt-unmatched" hidden>
               <h4>Unmatched changes blocking direct sync</h4>
               <p class="substatus">These are selected watch-history, watchlist, or Continue Watching changes that cannot safely be matched. Exclude an individual change below, or choose <strong>Exclude all unmatched changes</strong>. This only changes the proposed migration; it never removes anything from Nuvio or your original Trakt archive.</p>
@@ -201,10 +206,10 @@ export function patchExportTemplate(source) {
               <h4>Live Trakt comparison</h4>
               <p id="trakt-plan-counts" aria-live="polite"></p>
               <div id="trakt-progress-mapping" hidden>
-                <h4>Continue Watching conversions — review before syncing</h4>
-                <p class="substatus">The names below come from your selected Nuvio data and resolved metadata. If a title still shows as <code>tt...</code>, use <strong>Resolve unidentified titles</strong> in the metadata section above to look it up. At 80% to below 89%, the Trakt pause request is set to 79.99% to avoid its completion threshold. At 89% or above, an individual dated watched-history record is proposed, not a scrobble/stop request. Any entry already represented as watched is not uploaded a second time. These rules apply only to direct Trakt sync; the ZIP retains the original progress.</p>
+                <h4>Resume positions and conversions — review before syncing</h4>
+                <p class="substatus">Every selected Nuvio resume entry is compared against Trakt's current playback positions. The list shows the original percentage, the proposed percentage or watched action, and whether Trakt already has an equal or newer state. Values below 1% are safely raised to 2%; 80%–under-89% become 79.99%; 89%+ become dated watched-history records if not already watched. Original ZIP playback stays unchanged. If a title still shows as <code>tt...</code>, use <strong>Resolve unidentified titles</strong> above.</p>
                 <ul id="trakt-progress-mapping-list" class="export-unmatched-list"></ul>
-                <p class="inline-warning">You can exclude individual converted records below. Each exclusion also unchecks its original Continue Watching change and requires a fresh live comparison. A Trakt pause has a newly assigned timestamp; an inferred watched event uses the Nuvio last-progress timestamp as its watched date.</p>
+                <p class="inline-warning">You can exclude any resume entry below. This unchecks the matching Nuvio change and requires another comparison. Trakt assigns a new paused timestamp, while inferred watched events retain the Nuvio last-progress timestamp.</p>
               </div>
               <p class="inline-warning">Trakt's pause API saves the current resume percentage, but it cannot backdate the original Nuvio pause time. Paused progress may not appear in Trakt's Next Up list. This sync does not delete existing Trakt data.</p>
             </div>
