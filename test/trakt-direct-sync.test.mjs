@@ -424,3 +424,18 @@ test("watchlist movie/show collisions are individually excludable without discar
   assert.equal(after.watched.length,1);
   assert.equal(after.watchlist.length,0);
 });
+
+
+test("Early resume percentages are safely rounded to 2% for direct sync",()=>{
+  const data=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const values=[0,0.12,0.999,1,2,79.5,84.5,89];
+  const changes={updates:new Map(),changes:{history:[],watchlist:[],playback:values.map((progress,i)=>({
+    id:"progress:"+i,action:"add",entry:{type:"movie",movie:{title:"Film "+i,ids:{tmdb:2000+i}},
+    progress,paused_at:"2026-10-26T01:00:00Z"}
+  }))}};
+  const result=buildTraktSyncCandidates(data,changes);
+  assert.deepEqual(result.playback.map(x=>x.progress),[2,2,2,1,2,79.5,79.99]);
+  assert.deepEqual(result.playback.map(x=>x.adjustment),["low","low","low",null,null,null,"high"]);
+  assert.equal(result.inferredWatched.length,1);
+  assert.equal(result.inferredWatched[0].originalProgress,89);
+});
