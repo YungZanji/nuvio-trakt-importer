@@ -743,21 +743,29 @@ function renderTraktProgressMapping(plan,candidates) {
   if(!wrapper || !list)return;
   list.replaceChildren();
   const inferredNew=new Set((plan.inferredWatched||[]).map(item=>item.changeId));
-  const pauseNew=new Set((plan.adjustedPlayback||[]).map(item=>item.changeId));
+  const pauseNew=new Set((plan.playback||[]).map(item=>item.changeId));
   const records=[
-    ...(candidates.adjustedPlayback||[]).map(item=>({
-      item,display:"Pause "+item.originalProgress.toFixed(2)+"% → "+item.progress.toFixed(2)+"%",
-      action:pauseNew.has(item.changeId)?"Will sync":"Already present/newer on Trakt — skipped",
+    ...(candidates.playback||[]).map(item=>({
+      item,
+      display:item.adjustment==="high"
+        ? "Pause "+item.originalProgress.toFixed(2)+"% → 79.99%"
+        : item.adjustment==="low"
+          ? "Pause "+item.originalProgress.toFixed(2)+"% → 2.00% (safe minimum)"
+          : "Pause "+item.progress.toFixed(2)+"% (unchanged)",
+      action:pauseNew.has(item.changeId)?"Will sync":
+        "Trakt already has an equal/newer resume or a later watched event — skipped",
     })),
     ...(candidates.inferredWatched||[]).map(item=>({
       item,display:"Watched (assumed from "+item.originalProgress.toFixed(2)+"%)",
-      action:inferredNew.has(item.changeId)?"Will add dated watched event":"Already present/newer on Trakt — skipped",
+      action:inferredNew.has(item.changeId)?"Will add dated watched event":
+        "Already watched on Trakt — skipped",
     })),
     ...(candidates.alreadyWatchedProgress||[]).map(item=>({
       item,display:"Already watched in Nuvio ("+item.originalProgress.toFixed(2)+"%)",
       action:"Nuvio watched-history entry takes precedence — no duplicate",
     })),
-  ].sort((a,b)=>Number(a.item.changeId?.split(":")[1]||0)-Number(b.item.changeId?.split(":")[1]||0));
+  ].sort((a,b)=>Number(a.item.changeId?.split(":")[1]||0)-
+    Number(b.item.changeId?.split(":")[1]||0));
   wrapper.hidden=!records.length;
   for(const row of records){
     const li=document.createElement("li");
@@ -781,6 +789,35 @@ function renderTraktProgressMapping(plan,candidates) {
   }
 }
 
+function renderTraktPlaybackFailures(report) {
+  const wrapper=$("trakt-playback-errors"),list=$("trakt-playback-errors-list");
+  if(!wrapper||!list)return;
+  list.replaceChildren();
+  const rejected=report?.playbackRejected||[];
+  wrapper.hidden=!rejected.length;
+  for(const row of rejected){
+    const li=document.createElement("li");
+    const label=document.createElement("span");
+    label.textContent=traktMediaDescription(row)+" — attempted "+row.progress.toFixed(2)+
+      "% (Nuvio "+row.originalProgress.toFixed(2)+"%) · "+row.message+" ";
+    li.append(label);
+    if(row.changeId){
+      const button=document.createElement("button");
+      button.type="button";
+      button.className="secondary";
+      button.textContent="Exclude before retry";
+      button.addEventListener("click",()=>{
+        exportExcludedChanges.add(row.changeId);
+        renderExportPreview();
+        $("trakt-connect-status").textContent=
+          traktMediaDescription(row)+" excluded. Compare again before syncing.";
+      });
+      li.append(button);
+    }
+    list.append(li);
+  }
+}
+
 async function compareTraktDirect() {
   if (traktBusy || !traktConnection) return;
   traktBusy=true;
@@ -788,6 +825,7 @@ async function compareTraktDirect() {
   updateTraktSyncUi();
   try {
     const candidates=syncCandidatesNow();
+    renderTraktPlaybackFailures(null);
     renderUnmatchedTraktChanges();
     if(candidates.unresolved.length){
       const samples=candidates.unresolved.slice(0,4).map(row=>
@@ -812,7 +850,10 @@ async function compareTraktDirect() {
       " · "+plan.history.length+" new watched events ("+plan.inferredWatched.length+
       " inferred from ≥89% playback), "+plan.watchlist.length+
       " new watchlist titles, "+plan.playback.length+" resume positions ("+
-      plan.adjustedPlayback.length+" adjusted to 79.99%). Already on Trakt or newer there: "+
+      plan.adjustedPlayback.filter(item=>item.adjustment==="high").length+
+      " reduced to 79.99%, "+
+      plan.adjustedPlayback.filter(item=>item.adjustment==="low").length+
+      " raised to 2%). Already on Trakt or newer there: "+
       plan.existingSkipped.history+" watches, "+plan.existingSkipped.watchlist+
       " watchlist entries, "+plan.existingSkipped.playback+" resume positions. "+
       "Every conversion below is traceable to a checked Nuvio change.";
@@ -846,12 +887,17 @@ async function commitTraktDirect() {
     " watched events, "+plan.watchlist.length+" watchlist titles and "+plan.playback.length+
     " resume positions. This INCLUDES "+plan.inferredWatched.length+
     " inferred watched entries from Nuvio progress ≥89%, and "+
-    plan.adjustedPlayback.length+" resume positions reduced to 79.99% because their original progress was between 80% and 89%. The backup ZIP retains the exact original percentages. No existing Trakt records will be deleted. This may not be reversible.");
+    plan.adjustedPlayback.filter(item=>item.adjustment==="high").length+
+    " resume positions reduced to 79.99% (80%–<89% originally), and "+
+    plan.adjustedPlayback.filter(item=>item.adjustment==="low").length+
+    " very early resume positions raised to 2% (originally under 1%). All other pauses retain their percentages. "+
+    "Already present Trakt resume positions were skipped. The backup ZIP retains the exact original percentages. "+
+    "No existing Trakt records will be deleted. This may not be reversible.");
   if (!approved) return;
   traktBusy=true;
   traktLivePlan=null; // a plan is consumed once, even on partial error; recompare before retrying
   updateTraktSyncUi();
-  let last={history:0,watchlist:0,playback:0};
+  let last={history:0,watchlist:0,playback:0,playbackRejected:[]};
   try {
     const api=makeTraktApi(traktConnection);
     const report=await executeTraktSync(api,plan,{onConfirmed:(kind,group)=>{
@@ -861,16 +907,25 @@ async function commitTraktDirect() {
       }
     },onProgress:progress=>{
       last=progress;
+      renderTraktPlaybackFailures(progress);
       $("trakt-connect-status").textContent="Trakt sync in progress: "+
-        last.history+" watches, "+last.watchlist+" watchlist, "+last.playback+" playback positions confirmed.";
+        last.history+" watches, "+last.watchlist+" watchlist, "+last.playback+
+        " playback positions confirmed, "+(last.playbackRejected?.length||0)+
+        " playback entries rejected (shown below).";
     }});
+    renderTraktPlaybackFailures(report);
     $("trakt-connect-status").textContent="Trakt confirmed "+report.history+" watched events, "+
       report.watchlist+" watchlist entries and "+report.playback+" playback positions. "+
-      (report.notFound.length?report.notFound.length+" items were not found by Trakt; check and retry after correcting IDs.":"No unmatched items reported.");
+      report.playbackRejected.length+" individual playback items were rejected; review the titles and percentages below before re-comparing. "+
+      (report.notFound.length?report.notFound.length+" history/watchlist IDs were not found; check those records.":"");
   } catch(error) {
     $("trakt-connect-status").textContent="Sync stopped after a Trakt API error: "+(error.message||error)+
       ". Confirmed so far: "+last.history+" watches, "+last.watchlist+" watchlist, "+
-      last.playback+" playback positions. Run Compare again before retrying; never blindly resend.";
+      last.playback+" playback positions and "+(last.playbackRejected?.length||0)+
+      " individual playback rejections. "+(error.failedItem?
+        "Failed media: "+traktMediaDescription(error.failedItem)+
+        " at "+Number(error.failedItem.progress).toFixed(2)+"%. ":"")+
+      "Run Compare again before retrying; never blindly resend.";
   } finally {
     traktBusy=false;
     updateTraktSyncUi();

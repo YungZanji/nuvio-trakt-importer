@@ -317,7 +317,7 @@ test("Trakt sync refuses >=80% pause even if a malformed older plan slips throug
   const api=async()=>{throw Error("No API write expected");};
   await assert.rejects(executeTraktSync(api,{history:[],watchlist:[],playback:[
     {changeId:"progress:0",type:"movie",ids:{imdb:"tt1234567"},progress:84.7152}
-  ]}),/Refusing unsafe pause/);
+  ]}),/Unsafe pause progress/);
 });
 
 test("partial Trakt batch only acknowledges fully confirmed groups",async()=>{
@@ -423,4 +423,104 @@ test("watchlist movie/show collisions are individually excludable without discar
   assert.equal(after.unresolved.length,0);
   assert.equal(after.watched.length,1);
   assert.equal(after.watchlist.length,0);
+});
+
+
+test("Early resume percentages are safely rounded to 2% for direct sync",()=>{
+  const data=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const values=[0,0.12,0.999,1,2,79.5,84.5,89];
+  const changes={updates:new Map(),changes:{history:[],watchlist:[],playback:values.map((progress,i)=>({
+    id:"progress:"+i,action:"add",entry:{type:"movie",movie:{title:"Film "+i,ids:{tmdb:2000+i}},
+    progress,paused_at:"2026-10-26T01:00:00Z"}
+  }))}};
+  const result=buildTraktSyncCandidates(data,changes);
+  assert.deepEqual(result.playback.map(x=>x.progress),[2,2,2,1,2,79.5,79.99]);
+  assert.deepEqual(result.playback.map(x=>x.adjustment),["low","low","low",null,null,null,"high"]);
+  assert.equal(result.inferredWatched.length,1);
+  assert.equal(result.inferredWatched[0].originalProgress,89);
+});
+
+
+test("Live playback comparison skips 11 previously saved positions after reload",async()=>{
+  const files=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const changes={updates:new Map(),changes:{history:[],watchlist:[],playback:
+    Array.from({length:12},(_,i)=>({id:"progress:"+i,action:"add",
+      entry:{type:"movie",movie:{title:"Movie "+i,ids:{tmdb:1000+i}},
+        progress:i===0?0.25:20+i,paused_at:"2026-10-25T19:33:00Z"}}))
+  }};
+  const candidates=buildTraktSyncCandidates(files,changes);
+  let queried=0;
+  const api=async path=>{
+    if(path.startsWith("/sync/history"))return wrap([]);
+    if(path.startsWith("/sync/playback")){
+      queried++;
+      return wrap(Array.from({length:11},(_,i)=>({
+        type:"movie",movie:{ids:{trakt:i+1,tmdb:1000+i}},
+        progress:i===0?2:20+i,paused_at:"2026-10-26T15:00:00Z",
+      })));
+    }
+    throw Error(path);
+  };
+  const plan=await planTraktSync(api,candidates);
+  assert.equal(queried,1);
+  assert.equal(plan.playback.length,1);
+  assert.equal(plan.playback[0].changeId,"progress:11");
+  assert.equal(plan.existingSkipped.playback,11);
+});
+
+test("422 scrobble rejection is isolated, other playback items still sync",async()=>{
+  const plan={history:[],watchlist:[],playback:[
+    {type:"movie",ids:{tmdb:40},title:"Saved",changeId:"progress:1",progress:2,originalProgress:0.3},
+    {type:"episode",ids:{tmdb:42},title:"Rejected Show",season:2,episode:4,changeId:"progress:2",progress:25},
+    {type:"movie",ids:{tmdb:44},title:"Saved Later",changeId:"progress:3",progress:40},
+  ]};
+  let call=0;const confirmed=[];
+  const api=async()=>{
+    call++;
+    if(call===2)throw Object.assign(new Error("Trakt 422 progress_too_low"),{status:422});
+    return wrap({action:"pause"});
+  };
+  const report=await executeTraktSync(api,plan,{sleep:async()=>{},
+    onConfirmed:(kind,items)=>confirmed.push(...items.map(x=>x.changeId))});
+  assert.equal(call,3);
+  assert.equal(report.playback,2);
+  assert.deepEqual(confirmed,["progress:1","progress:3"]);
+  assert.equal(report.playbackRejected.length,1);
+  assert.equal(report.playbackRejected[0].title,"Rejected Show");
+  assert.equal(report.playbackRejected[0].season,2);
+  assert.equal(report.playbackRejected[0].episode,4);
+  assert.match(report.playbackRejected[0].message,/progress_too_low/);
+});
+
+
+test("An old playback response row does not override a newer server pause",async()=>{
+  const files=new Map([["watched-history-1.json","[]"],["lists-watchlist.json","[]"]]);
+  const merge={updates:new Map(),changes:{history:[],watchlist:[],playback:[{
+    id:"progress:1",action:"add",entry:{type:"movie",movie:{title:"Test",ids:{tmdb:70}},
+      progress:30,paused_at:"2026-10-24T09:00:00Z"}
+  }]}};
+  const candidate=buildTraktSyncCandidates(files,merge);
+  const api=async path=>{
+    if(path.startsWith("/sync/history"))return wrap([]);
+    if(path.startsWith("/sync/playback"))return wrap([
+      {type:"movie",movie:{ids:{tmdb:70}},progress:42,paused_at:"2026-10-25T09:00:00Z"},
+      {type:"movie",movie:{ids:{tmdb:70}},progress:10,paused_at:"2026-10-23T09:00:00Z"},
+    ]);
+    throw Error(path);
+  };
+  const planned=await planTraktSync(api,candidate);
+  assert.equal(planned.playback.length,0);
+});
+
+test("Other Trakt failures halt without silently continuing to send data",async()=>{
+  const items=[{type:"movie",ids:{tmdb:20},progress:30,changeId:"progress:0"},
+    {type:"movie",ids:{tmdb:21},progress:40,changeId:"progress:1"}];
+  for(const status of [401,403,429,500]){
+    let attempts=0;
+    await assert.rejects(executeTraktSync(async()=>{
+      attempts++;
+      throw Object.assign(new Error("Trakt "+status),{status});
+    },{history:[],watchlist:[],playback:items},{sleep:async()=>{}}),/Trakt/);
+    assert.equal(attempts,1);
+  }
 });
